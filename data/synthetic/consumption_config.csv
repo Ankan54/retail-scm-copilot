@@ -1,0 +1,2 @@
+config_id,product_id,dealer_id,backward_days,forward_days,direction_priority,quantity_tolerance_pct,expire_after_days,effective_from,effective_to,created_at
+280c4387-4afb-41b7-963e-167dc207f861,,,7,3,BACKWARD_FIRST,25,10,2024-01-01,,2024-01-01 00:00:00

@@ -4,9 +4,9 @@
 
 The SupplyChain Copilot is a multi-agent AI system designed specifically for Indian MSMEs in B2B distribution. Unlike enterprise solutions requiring complex ERP implementations, this system works through Telegram—a familiar interface that requires no training—to capture field intelligence and provide actionable insights.
 
-The core innovation is **commitment-aware intelligence**: the system extracts dealer commitments from natural language sales conversations (e.g., "Sharma ji will order 500 units next Tuesday") and combines them with historical transactional data to provide visibility into the sales pipeline that MSMEs currently lack.
+The core innovation is **commitment-aware intelligence**: the system extracts dealer commitments from natural language sales conversations (e.g., "Sharma ji will order 500 units next Tuesday") and combines them with historical transactional data to provide visibility into the sales pipeline that MSMEs currently lack. The system tracks commitment fulfillment using **forecast consumption logic** similar to enterprise ERP systems, enabling managers to see which commitments converted to actual orders.
 
-The architecture follows a multi-agent pattern using LangGraph for orchestration, with specialized agents handling different aspects of sales intelligence. The system is designed for accessibility: it works on basic smartphones, handles Hinglish input, and requires minimal data entry from field staff.
+The architecture follows a multi-agent pattern using **AWS Bedrock Multi-Agent Collaboration** for orchestration, with specialized agents handling different aspects of sales intelligence. The system is designed for accessibility: it works on basic smartphones, handles Hinglish input, and requires minimal data entry from field staff.
 
 ## Architecture
 
@@ -16,65 +16,69 @@ The architecture follows a multi-agent pattern using LangGraph for orchestration
 graph TB
     subgraph "User Interfaces"
         TELEGRAM[Telegram Bot<br/>Sales Representatives]
-        STREAMLIT[Streamlit Dashboard<br/>Sales Managers]
+        REACT[React.js Dashboard<br/>Sales Managers]
     end
     
-    subgraph "Agent Layer - LangGraph"
+    subgraph "API Layer"
+        APIGW[AWS API Gateway]
+        WEBHOOK[Telegram Webhook<br/>Lambda]
+    end
+    
+    subgraph "Agent Layer - AWS Bedrock"
         SUPERVISOR[Supervisor Agent<br/>Intent Classification & Routing]
         VISIT_CAPTURE[Visit Capture Agent<br/>NL Extraction & Entity Resolution]
         DEALER_INTEL[Dealer Intelligence Agent<br/>Profiles, Payments, Health Scores]
+        ORDER_PLAN[Order Planning Agent<br/>Commitment Fulfillment & ATP]
     end
     
-    subgraph "Tool Layer - MCP Protocol"
-        MCP_TOOLS[MCP Tools]
-        GET_DEALER[get_dealer_profile]
-        GET_PAYMENT[get_payment_status]
-        GET_ORDERS[get_order_history]
-        GET_HEALTH[get_dealer_health_score]
-        RESOLVE[resolve_entity]
-        CREATE_VISIT[create_visit_record]
-        CREATE_COMMIT[create_commitment]
-        SUGGEST_PLAN[suggest_visit_plan]
+    subgraph "Tool Layer - Lambda Action Groups"
+        AG_DEALER[Dealer Action Group]
+        AG_VISIT[Visit Action Group]
+        AG_ORDER[Order Action Group]
+        AG_ANALYTICS[Analytics Action Group]
     end
     
     subgraph "Data Layer"
         SQLITE[(SQLite Database)]
     end
     
-    subgraph "AI Services"
-        BEDROCK[AWS Bedrock<br/>Claude Sonnet]
+    subgraph "AWS Services"
+        BEDROCK[Amazon Bedrock<br/>Claude Sonnet]
+        LAMBDA[AWS Lambda]
+        S3[Amazon S3]
+        AMPLIFY[AWS Amplify]
     end
     
-    TELEGRAM --> SUPERVISOR
-    STREAMLIT --> SQLITE
+    TELEGRAM --> WEBHOOK
+    WEBHOOK --> APIGW
+    REACT --> APIGW
+    
+    APIGW --> SUPERVISOR
     
     SUPERVISOR --> BEDROCK
     SUPERVISOR --> VISIT_CAPTURE
     SUPERVISOR --> DEALER_INTEL
+    SUPERVISOR --> ORDER_PLAN
     
     VISIT_CAPTURE --> BEDROCK
-    VISIT_CAPTURE --> MCP_TOOLS
+    VISIT_CAPTURE --> AG_VISIT
     
     DEALER_INTEL --> BEDROCK
-    DEALER_INTEL --> MCP_TOOLS
+    DEALER_INTEL --> AG_DEALER
+    DEALER_INTEL --> AG_ANALYTICS
     
-    MCP_TOOLS --> GET_DEALER
-    MCP_TOOLS --> GET_PAYMENT
-    MCP_TOOLS --> GET_ORDERS
-    MCP_TOOLS --> GET_HEALTH
-    MCP_TOOLS --> RESOLVE
-    MCP_TOOLS --> CREATE_VISIT
-    MCP_TOOLS --> CREATE_COMMIT
-    MCP_TOOLS --> SUGGEST_PLAN
+    ORDER_PLAN --> BEDROCK
+    ORDER_PLAN --> AG_ORDER
     
-    GET_DEALER --> SQLITE
-    GET_PAYMENT --> SQLITE
-    GET_ORDERS --> SQLITE
-    GET_HEALTH --> SQLITE
-    RESOLVE --> SQLITE
-    CREATE_VISIT --> SQLITE
-    CREATE_COMMIT --> SQLITE
-    SUGGEST_PLAN --> SQLITE
+    AG_DEALER --> LAMBDA
+    AG_VISIT --> LAMBDA
+    AG_ORDER --> LAMBDA
+    AG_ANALYTICS --> LAMBDA
+    
+    LAMBDA --> SQLITE
+    
+    REACT --> AMPLIFY
+    AMPLIFY --> S3
 ```
 
 ### Agent Interaction Flow
@@ -82,1383 +86,1162 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant User as Sales Rep (Telegram)
-    participant Bot as Telegram Bot
+    participant Webhook as Telegram Webhook
     participant Sup as Supervisor Agent
     participant VC as Visit Capture Agent
     participant DI as Dealer Intelligence Agent
-    participant MCP as MCP Tools
+    participant OP as Order Planning Agent
+    participant Lambda as Lambda Functions
     participant DB as SQLite
     participant LLM as AWS Bedrock (Claude)
     
-    Note over User,LLM: Flow 1: Log Visit
-    User->>Bot: "Met Sharma Distributors, collected 45K, will order 50 cases next week"
-    Bot->>Sup: Process message
+    Note over User,LLM: Flow 1: Log Visit with Commitment
+    User->>Webhook: "Met Sharma Distributors, collected 45K, will order 50 cases next week"
+    Webhook->>Sup: Process message
     Sup->>LLM: Classify intent
     LLM-->>Sup: Intent: VISIT_LOG
     Sup->>VC: Handle visit capture
-    VC->>MCP: resolve_entity("Sharma Distributors")
-    MCP->>DB: Fuzzy match dealer name
-    DB-->>MCP: dealer_id: 1042, confidence: 0.92
+    VC->>Lambda: resolve_entity("Sharma Distributors")
+    Lambda->>DB: Fuzzy match dealer name
+    DB-->>Lambda: dealer_id: 1042, confidence: 0.92
     VC->>LLM: Extract structured data from notes
-    LLM-->>VC: {dealer, payment: 45000, commitment: {product: null, qty: 50, timeframe: "next week"}}
-    VC->>Bot: Confirm extraction with user
-    Bot->>User: "✓ Sharma Distributors | ₹45K collected | 50 cases next week. Save?"
-    User->>Bot: [✓ Save]
-    VC->>MCP: create_visit_record(...)
-    VC->>MCP: create_commitment(...)
-    MCP->>DB: INSERT visit, commitment
-    Bot->>User: "Visit saved! 🎉"
+    LLM-->>VC: {dealer, payment: 45000, commitment: {qty: 50, timeframe: "next week"}}
+    VC->>Webhook: Confirm extraction with user
+    Webhook->>User: "✓ Sharma Distributors | ₹45K collected | 50 cases next week. Save?"
+    User->>Webhook: [✓ Save]
+    VC->>Lambda: create_visit_record(...)
+    VC->>Lambda: create_commitment(...)
+    Lambda->>DB: INSERT visit, commitment
+    Webhook->>User: "Visit saved! 🎉"
     
-    Note over User,LLM: Flow 2: Dealer Briefing
-    User->>Bot: "Brief me for Gupta Traders"
-    Bot->>Sup: Process message
+    Note over User,LLM: Flow 2: Order Placed - Commitment Consumption
+    User->>Webhook: "Sharma ji placed order for 50 cases"
+    Webhook->>Sup: Process message
     Sup->>LLM: Classify intent
-    LLM-->>Sup: Intent: DEALER_INQUIRY
-    Sup->>DI: Get dealer briefing
-    DI->>MCP: get_dealer_profile("Gupta Traders")
-    DI->>MCP: get_payment_status(dealer_id)
-    DI->>MCP: get_order_history(dealer_id)
-    DI->>MCP: get_dealer_health_score(dealer_id)
-    MCP->>DB: SELECT queries
-    DB-->>MCP: Profile, payments, orders, health data
-    DI->>LLM: Generate briefing summary
-    LLM-->>DI: Formatted briefing text
-    DI->>Bot: Briefing response
-    Bot->>User: "📋 GUPTA TRADERS BRIEFING\n💰 ₹1.2L overdue (18 days)..."
+    LLM-->>Sup: Intent: ORDER_CAPTURE
+    Sup->>OP: Handle order with commitment matching
+    OP->>Lambda: get_pending_commitments("Sharma Distributors")
+    Lambda->>DB: SELECT pending commitments
+    DB-->>Lambda: [{commitment_id: 101, qty: 50, expected_date: "next week"}]
+    OP->>Lambda: check_inventory(product_id, qty: 50)
+    Lambda->>DB: SELECT available stock
+    DB-->>Lambda: {available: 75, reserved: 10}
+    OP->>Lambda: consume_commitment(commitment_id: 101, order_qty: 50)
+    Lambda->>DB: UPDATE commitment SET status='fulfilled'
+    OP->>Lambda: create_order(...)
+    Lambda->>DB: INSERT order
+    Webhook->>User: "✅ Order created | Commitment fulfilled | Stock available"
 ```
 
 ### Technology Stack
 
 **Backend Services:**
 - **Language**: Python 3.11+
-- **Agent Framework**: LangGraph for multi-agent orchestration and state management
-- **Tool Protocol**: MCP (Model Context Protocol) for standardized tool interfaces
+- **Agent Framework**: AWS Bedrock Multi-Agent Collaboration
+- **Tool Interface**: Lambda Action Groups (OpenAPI schema + Lambda functions)
 - **Database**: SQLite for structured data storage (sufficient for MSME scale)
-- **Bot Framework**: python-telegram-bot or aiogram for Telegram integration
+- **Bot Framework**: python-telegram-bot with AWS Lambda webhook
 
 **AI Components:**
 - **LLM Provider**: AWS Bedrock (Claude Sonnet) for all agent intelligence
-- **Entity Resolution**: Fuzzy matching using rapidfuzz library
+- **Agent Orchestration**: AWS Bedrock Supervisor-Collaborator pattern
+- **Entity Resolution**: Fuzzy matching using rapidfuzz library (in Lambda)
 - **Intent Classification**: LLM-based classification via Supervisor Agent
 
 **Frontend:**
 - **Sales Rep Interface**: Telegram Bot with inline keyboards
-- **Manager Dashboard**: Streamlit for simple web-based dashboard
+- **Manager Dashboard**: React.js with Bootstrap/Tailwind CSS
 
 **Cloud Infrastructure (AWS):**
-- **AI Services**: Amazon Bedrock for Claude model access
-- **Compute**: AWS Lambda for serverless bot hosting (optional)
-- **Storage**: S3 for any file storage needs
+- **AI Services**: Amazon Bedrock for Claude model access and agent orchestration
+- **Compute**: AWS Lambda for action groups and webhook handling
+- **API**: AWS API Gateway for REST endpoints
+- **Storage**: Amazon S3 for static assets and SQLite database file
+- **Frontend Hosting**: AWS Amplify for React dashboard
+- **Monitoring**: Amazon CloudWatch for logs and metrics
 
 ## Components and Interfaces
 
-### Telegram Bot Component
+### Telegram Bot Component (Lambda Webhook)
 
 ```python
+import json
+import boto3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler
-from typing import Dict, Any
+from telegram.ext import Application
 
-class TelegramBotInterface:
-    """Primary interface for sales representatives."""
+# Initialize Bedrock Agent client
+bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
+
+AGENT_ID = "your-supervisor-agent-id"
+AGENT_ALIAS_ID = "your-agent-alias-id"
+
+def lambda_handler(event, context):
+    """Lambda handler for Telegram webhook."""
+    body = json.loads(event['body'])
+    update = Update.de_json(body, None)
     
-    def __init__(self, token: str, supervisor_agent):
-        self.application = Application.builder().token(token).build()
-        self.supervisor = supervisor_agent
-        self._setup_handlers()
+    if update.message:
+        return handle_message(update.message)
+    elif update.callback_query:
+        return handle_callback(update.callback_query)
     
-    def _setup_handlers(self):
-        """Configure bot command and message handlers."""
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CallbackQueryHandler(self.button_callback))
-        self.application.add_handler(MessageHandler(filters.TEXT, self.handle_message))
+    return {'statusCode': 200}
+
+def handle_message(message):
+    """Process incoming message through Bedrock Agent."""
+    user_id = str(message.from_user.id)
+    text = message.text
     
-    async def start_command(self, update: Update, context) -> None:
-        """Display main menu with primary actions."""
-        keyboard = [
-            [
-                InlineKeyboardButton("📝 Log Visit", callback_data="log_visit"),
-                InlineKeyboardButton("📅 Plan Day", callback_data="plan_day")
-            ],
-            [
-                InlineKeyboardButton("📊 Dashboard", callback_data="dashboard"),
-                InlineKeyboardButton("❓ Help", callback_data="help")
-            ]
+    # Check for commands
+    if text == '/start':
+        return send_main_menu(message.chat.id)
+    
+    # Send to Bedrock Supervisor Agent
+    response = bedrock_agent_runtime.invoke_agent(
+        agentId=AGENT_ID,
+        agentAliasId=AGENT_ALIAS_ID,
+        sessionId=user_id,
+        inputText=text
+    )
+    
+    # Process streaming response
+    agent_response = process_agent_response(response)
+    
+    # Send response back to Telegram
+    return send_telegram_message(message.chat.id, agent_response)
+
+def send_main_menu(chat_id):
+    """Display main menu with primary actions."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📝 Log Visit", callback_data="log_visit"),
+            InlineKeyboardButton("📅 Plan Day", callback_data="plan_day")
+        ],
+        [
+            InlineKeyboardButton("📊 Dashboard", callback_data="dashboard"),
+            InlineKeyboardButton("❓ Help", callback_data="help")
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "🙏 *Welcome to SupplyChain Copilot*\n\n"
-            "Choose an action or type your query:",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    async def handle_message(self, update: Update, context) -> None:
-        """Process natural language messages through supervisor agent."""
-        user_message = update.message.text
-        user_id = update.effective_user.id
-        
-        # Send typing indicator
-        await update.message.chat.send_action("typing")
-        
-        # Process through supervisor agent
-        response = await self.supervisor.process_query(
-            query=user_message,
-            user_id=user_id,
-            context=context.user_data
-        )
-        
-        # Format and send response
-        await self._send_response(update, response)
+    text = (
+        "🙏 *Welcome to SupplyChain Copilot*\n\n"
+        "Choose an action or type your query:\n\n"
+        "💬 Examples:\n"
+        "• _Brief me for Sharma Distributors_\n"
+        "• _Met Gupta Traders, collected 45K_\n"
+        "• _Aaj kisko visit karun?_"
+    )
     
-    async def button_callback(self, update: Update, context) -> None:
-        """Handle inline button callbacks."""
-        query = update.callback_query
-        await query.answer()
-        
-        if query.data == "log_visit":
-            await self._start_visit_log_flow(update, context)
-        elif query.data == "plan_day":
-            await self._show_visit_plan(update, context)
-        elif query.data == "dashboard":
-            await self._show_dashboard(update, context)
-        elif query.data == "help":
-            await self._show_help(update, context)
-        elif query.data.startswith("confirm_"):
-            await self._handle_confirmation(update, context, query.data)
-    
-    async def _send_response(self, update: Update, response: Dict[str, Any]) -> None:
-        """Format and send agent response with appropriate formatting."""
-        if response.get("keyboard"):
-            reply_markup = InlineKeyboardMarkup(response["keyboard"])
-        else:
-            reply_markup = None
-        
-        await update.message.reply_text(
-            response["text"],
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
+    return send_telegram_message(chat_id, text, reply_markup)
 ```
 
-### Agent System Components
+### AWS Bedrock Agent Configuration
 
-#### Supervisor Agent
+#### Supervisor Agent Instructions
 
-```python
-from langgraph.graph import StateGraph, END
-from typing import Dict, Any, List, TypedDict
-from enum import Enum
+```
+You are the Supervisor Agent for SupplyChain Copilot, an AI assistant for Indian MSME sales operations.
 
-class QueryIntent(str, Enum):
-    VISIT_LOG = "visit_log"
-    DEALER_INQUIRY = "dealer_inquiry"
-    PAYMENT_STATUS = "payment_status"
-    VISIT_PLAN = "visit_plan"
-    DASHBOARD = "dashboard"
-    GENERAL_QUERY = "general_query"
-    UNKNOWN = "unknown"
+Your role is to:
+1. Understand user intent from natural language queries (English, Hindi, or Hinglish)
+2. Route requests to the appropriate specialized agent
+3. Combine responses from multiple agents when needed
+4. Provide helpful responses when no specialized agent is needed
 
-class AgentState(TypedDict):
-    query: str
-    user_id: str
-    intent: QueryIntent
-    entities: Dict[str, Any]
-    agent_responses: List[Dict[str, Any]]
-    final_response: str
+Available Collaborator Agents:
+- Visit_Capture_Agent: Handles logging of dealer visits, extracting commitments, payments
+- Dealer_Intelligence_Agent: Provides dealer briefings, payment status, health scores, visit planning
+- Order_Planning_Agent: Handles order processing, commitment fulfillment, inventory checks
 
-class SupervisorAgent:
-    """
-    Routes user queries to appropriate specialized agents.
-    Handles intent classification and response synthesis.
-    """
-    
-    def __init__(self, bedrock_client, visit_capture_agent, dealer_intel_agent):
-        self.bedrock_client = bedrock_client
-        self.visit_capture = visit_capture_agent
-        self.dealer_intel = dealer_intel_agent
-        self.workflow = self._build_workflow()
-    
-    async def classify_intent(self, state: AgentState) -> AgentState:
-        """Use Claude to classify user intent from natural language."""
-        prompt = f"""Classify the intent of this sales representative's message.
-
-Message: {state["query"]}
-
-Possible intents:
-- VISIT_LOG: User wants to log a dealer visit (contains visit details, collections, commitments)
-- DEALER_INQUIRY: User wants information about a specific dealer (briefing, status, history)
-- PAYMENT_STATUS: User specifically asks about payment or outstanding amounts
-- VISIT_PLAN: User wants recommendations on which dealers to visit
+Intent Classification:
+- VISIT_LOG: User is describing a dealer visit they completed
+- DEALER_INQUIRY: User wants information about a dealer
+- PAYMENT_STATUS: User asks specifically about payments
+- VISIT_PLAN: User wants recommendations for which dealers to visit
 - DASHBOARD: User wants to see their performance metrics
-- GENERAL_QUERY: Other sales-related questions
-- UNKNOWN: Cannot determine intent
+- ORDER_CAPTURE: User is recording or discussing an order
+- COMMITMENT_STATUS: User asks about commitment fulfillment
+- GENERAL: General question or conversation
 
-Also extract any entities mentioned:
-- dealer_name: Name of dealer if mentioned
-- product_name: Product if mentioned
-- amount: Any monetary amount mentioned
-- timeframe: Any time reference (today, next week, etc.)
-
-Respond in JSON format:
-{{"intent": "INTENT_TYPE", "confidence": 0.0-1.0, "entities": {{...}}}}
-"""
-        
-        response = await self.bedrock_client.invoke_model(prompt)
-        result = self._parse_intent_response(response)
-        
-        state["intent"] = QueryIntent(result["intent"].lower())
-        state["entities"] = result.get("entities", {})
-        return state
-    
-    async def route_to_agent(self, state: AgentState) -> AgentState:
-        """Route query to appropriate specialized agent based on intent."""
-        intent = state["intent"]
-        
-        if intent == QueryIntent.VISIT_LOG:
-            response = await self.visit_capture.process_visit_notes(
-                notes=state["query"],
-                entities=state["entities"],
-                user_id=state["user_id"]
-            )
-        elif intent in [QueryIntent.DEALER_INQUIRY, QueryIntent.PAYMENT_STATUS]:
-            response = await self.dealer_intel.get_dealer_briefing(
-                dealer_identifier=state["entities"].get("dealer_name"),
-                include_payments=(intent == QueryIntent.PAYMENT_STATUS)
-            )
-        elif intent == QueryIntent.VISIT_PLAN:
-            response = await self.dealer_intel.suggest_visit_plan(
-                user_id=state["user_id"]
-            )
-        elif intent == QueryIntent.DASHBOARD:
-            response = await self.dealer_intel.get_rep_dashboard(
-                user_id=state["user_id"]
-            )
-        else:
-            response = await self._handle_general_query(state)
-        
-        state["agent_responses"].append(response)
-        return state
-    
-    async def synthesize_response(self, state: AgentState) -> AgentState:
-        """Combine agent responses into final user-facing response."""
-        if len(state["agent_responses"]) == 1:
-            state["final_response"] = state["agent_responses"][0]
-        else:
-            # Use Claude to synthesize multiple responses
-            state["final_response"] = await self._combine_responses(
-                state["agent_responses"]
-            )
-        return state
-    
-    def _build_workflow(self) -> StateGraph:
-        """Build LangGraph workflow for agent orchestration."""
-        workflow = StateGraph(AgentState)
-        
-        workflow.add_node("classify", self.classify_intent)
-        workflow.add_node("route", self.route_to_agent)
-        workflow.add_node("synthesize", self.synthesize_response)
-        
-        workflow.set_entry_point("classify")
-        workflow.add_edge("classify", "route")
-        workflow.add_edge("route", "synthesize")
-        workflow.add_edge("synthesize", END)
-        
-        return workflow.compile()
-    
-    async def process_query(self, query: str, user_id: str, context: Dict = None) -> Dict[str, Any]:
-        """Main entry point for processing user queries."""
-        initial_state: AgentState = {
-            "query": query,
-            "user_id": user_id,
-            "intent": QueryIntent.UNKNOWN,
-            "entities": {},
-            "agent_responses": [],
-            "final_response": ""
-        }
-        
-        final_state = await self.workflow.ainvoke(initial_state)
-        return final_state["final_response"]
+Handle Hinglish naturally:
+- "Sharma ji ka payment status" → PAYMENT_STATUS
+- "Aaj kisko visit karun?" → VISIT_PLAN
+- "Met Gupta Traders, 50K collect kiya" → VISIT_LOG
 ```
 
-#### Visit Capture Agent
+#### Visit Capture Agent Instructions
+
+```
+You are the Visit Capture Agent for SupplyChain Copilot.
+
+Your role is to extract structured information from natural language visit notes.
+
+When processing visit notes, extract:
+1. Dealer name (fuzzy match against database)
+2. Payment collected (amount and method if mentioned)
+3. Commitments (product, quantity, timeframe)
+4. Issues or complaints raised
+5. Follow-up actions needed
+6. Competitor information mentioned
+
+Always confirm extracted data with the user before saving.
+
+Handle various input formats:
+- "Met Sharma Distributors, collected 45K, will order 50 cases next week"
+- "Gupta Traders visit done. 30K cash liya. Complaint about delivery delay."
+- "Visited Metro - they'll order Product-A 100 units by Tuesday"
+
+Use the following action groups:
+- resolve_entity: Match dealer/product names
+- create_visit_record: Save visit to database
+- create_commitment: Save commitment to database
+```
+
+#### Dealer Intelligence Agent Instructions
+
+```
+You are the Dealer Intelligence Agent for SupplyChain Copilot.
+
+Your role is to provide comprehensive dealer information and analytics.
+
+Capabilities:
+1. Dealer Briefing: Profile, payment status, order history, pending commitments, health score
+2. Visit Planning: Prioritized list of dealers based on urgency factors
+3. Performance Dashboard: Sales metrics, collection progress, visit coverage
+4. At-Risk Alerts: Identify dealers needing attention
+
+When providing briefings, highlight:
+- Overdue payments prominently
+- Approaching commitment deadlines
+- Health score with reasons if below 70
+- Suggested talking points
+
+For visit planning, prioritize by:
+- Payment overdue amount and days
+- Days since last order
+- Pending commitments about to expire
+- Dealer health score
+- Days since last visit
+
+Use the following action groups:
+- get_dealer_profile: Basic dealer information
+- get_payment_status: Outstanding and overdue amounts
+- get_order_history: Recent orders
+- get_dealer_health_score: Calculated health metrics
+- suggest_visit_plan: Prioritized dealer list
+- get_rep_metrics: Sales rep performance data
+```
+
+#### Order Planning Agent Instructions
+
+```
+You are the Order Planning Agent for SupplyChain Copilot.
+
+Your role is to handle order processing and commitment fulfillment tracking.
+
+Capabilities:
+1. Order Capture: Record new orders
+2. Commitment Matching: Match orders against pending commitments (forecast consumption)
+3. Inventory Check: Verify available-to-promise (ATP) quantity
+4. Fulfillment Status: Track commitment conversion rates
+
+Forecast Consumption Logic:
+- When an order is placed, first try to match against pending commitments
+- Use backward consumption: Match against past (overdue) commitments first
+- Then use forward consumption: Match against future commitments
+- Update commitment status: pending → partial → fulfilled
+- Track missed commitments when due date passes without order
+
+Available-to-Promise (ATP) Check:
+- Check current inventory
+- Subtract reserved/committed quantities
+- If insufficient, suggest alternatives or order splitting
+
+Manager Alerts:
+- Generate alerts for at-risk dealers
+- Route discount approval requests above threshold
+- Flag missed commitments for review
+
+Use the following action groups:
+- get_pending_commitments: Unfulfilled commitments for dealer
+- consume_commitment: Match order against commitment
+- check_inventory: Verify ATP quantity
+- create_order: Record new order
+- generate_alert: Create manager alert
+```
+
+### Lambda Action Groups
+
+#### Dealer Action Group (Lambda Function)
 
 ```python
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel
+import json
+import sqlite3
 from rapidfuzz import fuzz, process
-
-class ExtractedVisitData(BaseModel):
-    """Structured data extracted from visit notes."""
-    dealer_id: Optional[str] = None
-    dealer_name: str
-    dealer_confidence: float
-    visit_date: str
-    visit_outcome: Optional[str] = None
-    payment_collected: Optional[float] = None
-    payment_method: Optional[str] = None
-    commitments: List[Dict[str, Any]] = []
-    issues: List[Dict[str, Any]] = []
-    follow_ups: List[str] = []
-    raw_notes: str
-
-class VisitCaptureAgent:
-    """
-    Extracts structured information from natural language visit notes.
-    Handles entity resolution and user confirmation flow.
-    """
-    
-    def __init__(self, bedrock_client, mcp_tools):
-        self.bedrock_client = bedrock_client
-        self.mcp_tools = mcp_tools
-    
-    async def process_visit_notes(
-        self, 
-        notes: str, 
-        entities: Dict[str, Any],
-        user_id: str
-    ) -> Dict[str, Any]:
-        """Main entry point for processing visit notes."""
-        
-        # Step 1: Extract structured data using Claude
-        extracted = await self._extract_visit_data(notes)
-        
-        # Step 2: Resolve dealer entity
-        dealer_resolution = await self._resolve_dealer(
-            extracted.dealer_name,
-            user_id
-        )
-        
-        if dealer_resolution["confidence"] < 0.7:
-            # Ask for clarification
-            return {
-                "type": "clarification_needed",
-                "text": f"🤔 I found these possible matches:\n\n" + 
-                        "\n".join([f"{i+1}. {d['name']}" for i, d in enumerate(dealer_resolution["candidates"][:3])]) +
-                        "\n\nWhich dealer did you mean?",
-                "keyboard": [[
-                    {"text": d["name"], "callback_data": f"dealer_{d['id']}"}
-                ] for d in dealer_resolution["candidates"][:3]]
-            }
-        
-        extracted.dealer_id = dealer_resolution["dealer_id"]
-        extracted.dealer_confidence = dealer_resolution["confidence"]
-        
-        # Step 3: Resolve product entities in commitments
-        for commitment in extracted.commitments:
-            if commitment.get("product_name"):
-                product_resolution = await self._resolve_product(commitment["product_name"])
-                commitment["product_id"] = product_resolution.get("product_id")
-        
-        # Step 4: Generate confirmation message
-        return self._generate_confirmation(extracted)
-    
-    async def _extract_visit_data(self, notes: str) -> ExtractedVisitData:
-        """Use Claude to extract structured data from natural language notes."""
-        prompt = f"""Extract structured information from these sales visit notes.
-The notes may be in English, Hindi, or Hinglish (mixed).
-
-Visit Notes: {notes}
-
-Extract:
-1. dealer_name: The dealer/shop name mentioned
-2. visit_outcome: Brief outcome (successful, follow-up needed, etc.)
-3. payment_collected: Amount collected (in INR), null if none
-4. payment_method: cash, UPI, cheque, etc. if mentioned
-5. commitments: List of order commitments with:
-   - product_name: Product mentioned (or null if generic)
-   - quantity: Number of units/cases
-   - timeframe: When they'll order (next week, Tuesday, etc.)
-6. issues: Any complaints or concerns mentioned
-7. follow_ups: Action items for next visit
-
-Respond in JSON format matching this structure exactly.
-Handle Hinglish: "50 cases next week order karega" means commitment of 50 cases for next week.
-"""
-        
-        response = await self.bedrock_client.invoke_model(prompt)
-        data = self._parse_extraction_response(response)
-        data["raw_notes"] = notes
-        return ExtractedVisitData(**data)
-    
-    async def _resolve_dealer(self, dealer_name: str, user_id: str) -> Dict[str, Any]:
-        """Resolve dealer name to dealer_id using fuzzy matching."""
-        # Get dealers assigned to this sales rep
-        dealers = await self.mcp_tools.call("get_rep_dealers", {"user_id": user_id})
-        
-        if not dealers:
-            return {"confidence": 0, "candidates": []}
-        
-        # Fuzzy match against dealer names and aliases
-        dealer_names = [(d["id"], d["name"]) for d in dealers]
-        
-        matches = process.extract(
-            dealer_name,
-            {d[0]: d[1] for d in dealer_names},
-            scorer=fuzz.token_sort_ratio,
-            limit=3
-        )
-        
-        if matches and matches[0][1] >= 70:
-            best_match = matches[0]
-            return {
-                "dealer_id": best_match[2],
-                "dealer_name": best_match[0],
-                "confidence": best_match[1] / 100,
-                "candidates": [{"id": m[2], "name": m[0], "score": m[1]} for m in matches]
-            }
-        
-        return {
-            "confidence": 0,
-            "candidates": [{"id": m[2], "name": m[0], "score": m[1]} for m in matches]
-        }
-    
-    async def _resolve_product(self, product_name: str) -> Dict[str, Any]:
-        """Resolve product name to product_id using fuzzy matching."""
-        products = await self.mcp_tools.call("get_products", {})
-        
-        if not products:
-            return {"product_id": None, "confidence": 0}
-        
-        matches = process.extract(
-            product_name,
-            {p["id"]: p["name"] for p in products},
-            scorer=fuzz.token_sort_ratio,
-            limit=1
-        )
-        
-        if matches and matches[0][1] >= 60:
-            return {
-                "product_id": matches[0][2],
-                "product_name": matches[0][0],
-                "confidence": matches[0][1] / 100
-            }
-        
-        return {"product_id": None, "confidence": 0}
-    
-    def _generate_confirmation(self, data: ExtractedVisitData) -> Dict[str, Any]:
-        """Generate user-friendly confirmation message."""
-        lines = [f"📋 *Visit Summary*\n"]
-        lines.append(f"🏪 *Dealer:* {data.dealer_name}")
-        
-        if data.payment_collected:
-            lines.append(f"💰 *Collected:* ₹{data.payment_collected:,.0f}")
-            if data.payment_method:
-                lines.append(f"   via {data.payment_method}")
-        
-        if data.commitments:
-            lines.append(f"\n📦 *Commitments:*")
-            for c in data.commitments:
-                product = c.get("product_name", "General order")
-                lines.append(f"   • {c['quantity']} units - {product} ({c['timeframe']})")
-        
-        if data.issues:
-            lines.append(f"\n⚠️ *Issues noted:* {len(data.issues)}")
-        
-        lines.append(f"\n_Save this visit record?_")
-        
-        return {
-            "type": "confirmation",
-            "text": "\n".join(lines),
-            "data": data.dict(),
-            "keyboard": [[
-                {"text": "✅ Save", "callback_data": "confirm_save"},
-                {"text": "✏️ Edit", "callback_data": "confirm_edit"},
-                {"text": "❌ Cancel", "callback_data": "confirm_cancel"}
-            ]]
-        }
-    
-    async def save_visit(self, data: ExtractedVisitData, user_id: str) -> Dict[str, Any]:
-        """Save confirmed visit data to database."""
-        # Create visit record
-        visit_result = await self.mcp_tools.call("create_visit_record", {
-            "dealer_id": data.dealer_id,
-            "sales_rep_id": user_id,
-            "visit_date": data.visit_date,
-            "outcome": data.visit_outcome,
-            "conversation_notes": data.raw_notes,
-            "payment_collected": data.payment_collected,
-            "payment_method": data.payment_method
-        })
-        
-        visit_id = visit_result["visit_id"]
-        
-        # Create commitment records
-        for commitment in data.commitments:
-            await self.mcp_tools.call("create_commitment", {
-                "visit_id": visit_id,
-                "dealer_id": data.dealer_id,
-                "product_id": commitment.get("product_id"),
-                "quantity": commitment["quantity"],
-                "timeframe": commitment["timeframe"],
-                "confidence": 0.8  # Default confidence for user-confirmed data
-            })
-        
-        return {
-            "type": "success",
-            "text": "✅ *Visit saved successfully!*\n\n"
-                   f"Visit ID: `{visit_id}`\n"
-                   f"Commitments logged: {len(data.commitments)}"
-        }
-```
-
-#### Dealer Intelligence Agent
-
-```python
-from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
-class DealerIntelligenceAgent:
-    """
-    Provides dealer information, health scores, and visit recommendations.
-    Combines data retrieval with AI-powered insights.
-    """
+DB_PATH = '/tmp/supplychain.db'
+
+def lambda_handler(event, context):
+    """Handle Dealer Action Group requests from Bedrock Agent."""
     
-    def __init__(self, bedrock_client, mcp_tools):
-        self.bedrock_client = bedrock_client
-        self.mcp_tools = mcp_tools
+    action = event['actionGroup']
+    function = event['function']
+    parameters = {p['name']: p['value'] for p in event.get('parameters', [])}
     
-    async def get_dealer_briefing(
-        self, 
-        dealer_identifier: str,
-        include_payments: bool = True
-    ) -> Dict[str, Any]:
-        """Generate comprehensive dealer briefing for pre-visit preparation."""
-        
-        # Resolve dealer if name provided
-        if not dealer_identifier.startswith("dealer_"):
-            dealer = await self._resolve_and_get_dealer(dealer_identifier)
-        else:
-            dealer = await self.mcp_tools.call("get_dealer_profile", {
-                "dealer_id": dealer_identifier
-            })
-        
-        if not dealer:
-            return {
-                "type": "error",
-                "text": "❌ Could not find dealer. Please check the name and try again."
-            }
-        
-        # Gather all relevant data
-        payment_status = await self.mcp_tools.call("get_payment_status", {
-            "dealer_id": dealer["id"]
-        })
-        
-        order_history = await self.mcp_tools.call("get_order_history", {
-            "dealer_id": dealer["id"],
-            "limit": 5
-        })
-        
-        health_score = await self.mcp_tools.call("get_dealer_health_score", {
-            "dealer_id": dealer["id"]
-        })
-        
-        pending_commitments = await self.mcp_tools.call("get_pending_commitments", {
-            "dealer_id": dealer["id"]
-        })
-        
-        # Format briefing
-        return self._format_briefing(
-            dealer, payment_status, order_history, 
-            health_score, pending_commitments
+    if function == 'get_dealer_profile':
+        result = get_dealer_profile(parameters['dealer_id'])
+    elif function == 'get_payment_status':
+        result = get_payment_status(parameters['dealer_id'])
+    elif function == 'get_order_history':
+        result = get_order_history(
+            parameters['dealer_id'],
+            int(parameters.get('limit', 5))
         )
+    elif function == 'get_dealer_health_score':
+        result = get_dealer_health_score(parameters['dealer_id'])
+    elif function == 'resolve_entity':
+        result = resolve_entity(
+            parameters['entity_type'],
+            parameters['entity_name'],
+            parameters.get('user_id')
+        )
+    else:
+        result = {'error': f'Unknown function: {function}'}
     
-    def _format_briefing(
-        self,
-        dealer: Dict,
-        payment: Dict,
-        orders: List[Dict],
-        health: Dict,
-        commitments: List[Dict]
-    ) -> Dict[str, Any]:
-        """Format dealer data into readable briefing."""
-        
-        # Health indicator
-        health_emoji = "🟢" if health["score"] >= 70 else "🟡" if health["score"] >= 50 else "🔴"
-        
-        lines = [
-            f"📋 *{dealer['name'].upper()} BRIEFING*",
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━",
-            f"",
-            f"*Health Score:* {health_emoji} {health['score']}/100",
-            f"*Credit Limit:* ₹{dealer['credit_limit']:,.0f}",
-            f"",
-        ]
-        
-        # Payment section - highlight if overdue
-        if payment["outstanding_amount"] > 0:
-            overdue_indicator = ""
-            if payment["days_overdue"] > 0:
-                overdue_indicator = f" ⚠️ *({payment['days_overdue']} days overdue)*"
-            lines.append(f"💰 *PAYMENT STATUS*{overdue_indicator}")
-            lines.append(f"   Outstanding: ₹{payment['outstanding_amount']:,.0f}")
-            if payment["days_overdue"] > 0:
-                lines.append(f"   Overdue: ₹{payment['overdue_amount']:,.0f}")
-        else:
-            lines.append(f"💰 *PAYMENT STATUS*: All clear ✅")
-        
-        lines.append("")
-        
-        # Recent orders
-        lines.append(f"📦 *RECENT ORDERS*")
-        if orders:
-            for order in orders[:3]:
-                lines.append(f"   • {order['date']}: ₹{order['amount']:,.0f} ({order['status']})")
-        else:
-            lines.append("   No recent orders")
-        
-        lines.append("")
-        
-        # Pending commitments
-        if commitments:
-            lines.append(f"📝 *PENDING COMMITMENTS*")
-            for c in commitments:
-                status_emoji = "🟢" if c["days_until_due"] > 3 else "🟡" if c["days_until_due"] > 0 else "🔴"
-                lines.append(f"   {status_emoji} {c['quantity']} units - due {c['due_date']}")
-        
-        # Recommendations
-        if health["score"] < 70 or payment["days_overdue"] > 0:
-            lines.append("")
-            lines.append(f"💡 *RECOMMENDED ACTIONS*")
-            if payment["days_overdue"] > 0:
-                lines.append(f"   • Prioritize collection of ₹{payment['overdue_amount']:,.0f}")
-            if health["score"] < 50:
-                lines.append(f"   • Investigate declining order pattern")
-            if health.get("days_since_last_order", 0) > 20:
-                lines.append(f"   • Check for competitor activity")
-        
-        return {
-            "type": "briefing",
-            "text": "\n".join(lines),
-            "dealer_id": dealer["id"]
-        }
-    
-    async def suggest_visit_plan(self, user_id: str) -> Dict[str, Any]:
-        """Generate prioritized list of dealers to visit."""
-        
-        # Get prioritized dealer list
-        recommendations = await self.mcp_tools.call("suggest_visit_plan", {
-            "sales_rep_id": user_id,
-            "max_dealers": 6
-        })
-        
-        if not recommendations:
-            return {
-                "type": "plan",
-                "text": "📅 No urgent visits identified for today.\n\nAll dealers are in good standing! 🎉"
+    return {
+        'messageVersion': '1.0',
+        'response': {
+            'actionGroup': action,
+            'function': function,
+            'functionResponse': {
+                'responseBody': {
+                    'TEXT': {'body': json.dumps(result)}
+                }
             }
+        }
+    }
+
+def get_dealer_profile(dealer_id):
+    """Get dealer profile information."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT d.*, t.name as territory_name, s.name as sales_rep_name
+        FROM dealers d
+        LEFT JOIN territories t ON d.territory_id = t.id
+        LEFT JOIN sales_persons s ON d.sales_rep_id = s.id
+        WHERE d.id = ?
+    """, (dealer_id,))
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return dict(row)
+    return {'error': 'Dealer not found'}
+
+def get_payment_status(dealer_id):
+    """Get dealer payment status including outstanding and overdue amounts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Get total outstanding
+    cursor.execute("""
+        SELECT 
+            COALESCE(SUM(i.total_amount - COALESCE(p.paid_amount, 0)), 0) as outstanding_amount,
+            COALESCE(SUM(CASE 
+                WHEN i.due_date < date('now') 
+                THEN i.total_amount - COALESCE(p.paid_amount, 0) 
+                ELSE 0 
+            END), 0) as overdue_amount,
+            MAX(CASE 
+                WHEN i.due_date < date('now') 
+                THEN julianday('now') - julianday(i.due_date)
+                ELSE 0
+            END) as days_overdue
+        FROM invoices i
+        LEFT JOIN (
+            SELECT invoice_id, SUM(amount) as paid_amount
+            FROM payments
+            GROUP BY invoice_id
+        ) p ON i.id = p.invoice_id
+        WHERE i.dealer_id = ? AND i.status != 'paid'
+    """, (dealer_id,))
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    return {
+        'dealer_id': dealer_id,
+        'outstanding_amount': row[0] or 0,
+        'overdue_amount': row[1] or 0,
+        'days_overdue': int(row[2] or 0)
+    }
+
+def get_dealer_health_score(dealer_id):
+    """Calculate dealer health score based on multiple factors."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Get order recency and frequency
+    cursor.execute("""
+        SELECT 
+            MAX(order_date) as last_order_date,
+            COUNT(*) as order_count,
+            AVG(total_amount) as avg_order_value
+        FROM orders
+        WHERE dealer_id = ? AND order_date >= date('now', '-6 months')
+    """, (dealer_id,))
+    order_data = cursor.fetchone()
+    
+    # Get payment behavior
+    cursor.execute("""
+        SELECT 
+            COUNT(CASE WHEN p.payment_date <= i.due_date THEN 1 END) as on_time_payments,
+            COUNT(*) as total_invoices
+        FROM invoices i
+        LEFT JOIN payments p ON i.id = p.invoice_id
+        WHERE i.dealer_id = ? AND i.invoice_date >= date('now', '-6 months')
+    """, (dealer_id,))
+    payment_data = cursor.fetchone()
+    
+    # Get commitment fulfillment
+    cursor.execute("""
+        SELECT 
+            COUNT(CASE WHEN status = 'fulfilled' THEN 1 END) as fulfilled,
+            COUNT(*) as total
+        FROM commitments
+        WHERE dealer_id = ? AND created_at >= date('now', '-6 months')
+    """, (dealer_id,))
+    commitment_data = cursor.fetchone()
+    
+    conn.close()
+    
+    # Calculate component scores
+    scores = {}
+    reasons = []
+    
+    # Recency score (25%)
+    if order_data[0]:
+        days_since_order = (datetime.now() - datetime.strptime(order_data[0], '%Y-%m-%d')).days
+        recency_score = max(0, 100 - (days_since_order * 2))
+        if days_since_order > 30:
+            reasons.append(f"No order in {days_since_order} days")
+    else:
+        recency_score = 0
+        reasons.append("No recent orders")
+    scores['recency'] = recency_score * 0.25
+    
+    # Frequency score (25%)
+    expected_orders = 6  # Expected orders in 6 months
+    frequency_score = min(100, (order_data[1] or 0) / expected_orders * 100)
+    if order_data[1] < 3:
+        reasons.append("Low order frequency")
+    scores['frequency'] = frequency_score * 0.25
+    
+    # Payment score (25%)
+    if payment_data[1] > 0:
+        payment_score = (payment_data[0] / payment_data[1]) * 100
+        if payment_score < 70:
+            reasons.append("Payment delays")
+    else:
+        payment_score = 50  # Neutral if no data
+    scores['payment'] = payment_score * 0.25
+    
+    # Commitment fulfillment score (25%)
+    if commitment_data[1] > 0:
+        fulfillment_score = (commitment_data[0] / commitment_data[1]) * 100
+        if fulfillment_score < 70:
+            reasons.append("Low commitment conversion")
+    else:
+        fulfillment_score = 50  # Neutral if no data
+    scores['fulfillment'] = fulfillment_score * 0.25
+    
+    total_score = sum(scores.values())
+    
+    # Determine status
+    if total_score >= 70:
+        status = 'healthy'
+    elif total_score >= 50:
+        status = 'at_risk'
+    else:
+        status = 'critical'
+    
+    return {
+        'dealer_id': dealer_id,
+        'score': round(total_score),
+        'status': status,
+        'components': scores,
+        'reasons': reasons[:3] if status != 'healthy' else []
+    }
+
+def resolve_entity(entity_type, entity_name, user_id=None):
+    """Resolve fuzzy entity name to ID using fuzzy matching."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    if entity_type == 'dealer':
+        if user_id:
+            cursor.execute("""
+                SELECT id, name FROM dealers 
+                WHERE sales_rep_id = (
+                    SELECT id FROM sales_persons WHERE telegram_id = ?
+                )
+            """, (user_id,))
+        else:
+            cursor.execute("SELECT id, name FROM dealers")
         
-        lines = [
-            "📅 *TODAY'S VISIT PLAN*",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━",
-            ""
-        ]
-        
-        # Group by priority
-        high_priority = [r for r in recommendations if r["priority"] == "high"]
-        medium_priority = [r for r in recommendations if r["priority"] == "medium"]
-        
-        if high_priority:
-            lines.append("🔴 *HIGH PRIORITY*")
-            for dealer in high_priority:
-                lines.append(f"\n*{dealer['dealer_name']}*")
-                for reason in dealer["reasons"][:2]:
-                    lines.append(f"   • {reason}")
-                lines.append(f"   👉 _{dealer['suggested_action']}_")
-        
-        if medium_priority:
-            lines.append("\n🟡 *MEDIUM PRIORITY*")
-            for dealer in medium_priority:
-                lines.append(f"\n*{dealer['dealer_name']}*")
-                lines.append(f"   • {dealer['reasons'][0]}")
-        
-        lines.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"📊 Total dealers: {len(recommendations)}")
-        lines.append("\n_Type dealer name for detailed briefing_")
-        
+        entities = {row['id']: row['name'] for row in cursor.fetchall()}
+    elif entity_type == 'product':
+        cursor.execute("SELECT id, name FROM products")
+        entities = {row['id']: row['name'] for row in cursor.fetchall()}
+    else:
+        conn.close()
+        return {'error': f'Unknown entity type: {entity_type}'}
+    
+    conn.close()
+    
+    if not entities:
+        return {'confidence': 0, 'candidates': []}
+    
+    matches = process.extract(
+        entity_name,
+        entities,
+        scorer=fuzz.token_sort_ratio,
+        limit=3
+    )
+    
+    if matches and matches[0][1] >= 70:
+        best_match = matches[0]
         return {
-            "type": "plan",
-            "text": "\n".join(lines)
+            'entity_id': best_match[2],
+            'entity_name': best_match[0],
+            'confidence': best_match[1] / 100,
+            'candidates': [
+                {'id': m[2], 'name': m[0], 'score': m[1]} 
+                for m in matches
+            ]
         }
     
-    async def get_rep_dashboard(self, user_id: str) -> Dict[str, Any]:
-        """Generate performance dashboard for sales representative."""
-        
-        # Get metrics
-        metrics = await self.mcp_tools.call("get_rep_metrics", {
-            "sales_rep_id": user_id,
-            "period": "current_month"
-        })
-        
-        # Create progress bars using Unicode
-        def progress_bar(value: float, max_val: float = 100) -> str:
-            filled = int((value / max_val) * 10)
-            empty = 10 - filled
-            return "█" * filled + "░" * empty
-        
-        sales_pct = min((metrics["sales_achieved"] / metrics["sales_target"]) * 100, 100)
-        collection_pct = min((metrics["collections"] / metrics["collection_target"]) * 100, 100)
-        visit_pct = min((metrics["dealers_visited"] / metrics["total_dealers"]) * 100, 100)
-        
-        lines = [
-            "📊 *YOUR DASHBOARD*",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━",
-            "",
-            "*Sales vs Target*",
-            f"{progress_bar(sales_pct)} {sales_pct:.0f}%",
-            f"₹{metrics['sales_achieved']:,.0f} / ₹{metrics['sales_target']:,.0f}",
-            "",
-            "*Collections*",
-            f"{progress_bar(collection_pct)} {collection_pct:.0f}%",
-            f"₹{metrics['collections']:,.0f} / ₹{metrics['collection_target']:,.0f}",
-            "",
-            "*Visit Coverage*",
-            f"{progress_bar(visit_pct)} {visit_pct:.0f}%",
-            f"{metrics['dealers_visited']} / {metrics['total_dealers']} dealers",
-            "",
+    return {
+        'confidence': 0,
+        'candidates': [
+            {'id': m[2], 'name': m[0], 'score': m[1]} 
+            for m in matches
         ]
-        
-        # Alerts section
-        if metrics.get("alerts"):
-            lines.append("⚠️ *ALERTS*")
-            for alert in metrics["alerts"][:3]:
-                lines.append(f"   • {alert}")
-        
-        return {
-            "type": "dashboard",
-            "text": "\n".join(lines)
-        }
+    }
 ```
 
-### MCP Tools Definition
+#### Order Action Group (Lambda Function)
 
 ```python
-from typing import Dict, Any, List
-from mcp import Tool, ToolParameter
+import json
+import sqlite3
+from datetime import datetime, timedelta
 
-class MCPToolRegistry:
-    """Registry of MCP tools for agent operations."""
+DB_PATH = '/tmp/supplychain.db'
+
+def lambda_handler(event, context):
+    """Handle Order Action Group requests from Bedrock Agent."""
     
-    def __init__(self, db_connection):
-        self.db = db_connection
-        self.tools = self._register_tools()
+    function = event['function']
+    parameters = {p['name']: p['value'] for p in event.get('parameters', [])}
     
-    def _register_tools(self) -> Dict[str, Tool]:
-        """Register all available MCP tools."""
-        return {
-            "get_dealer_profile": Tool(
-                name="get_dealer_profile",
-                description="Get dealer profile information including contact, credit limit, and status",
-                parameters=[
-                    ToolParameter(name="dealer_id", type="string", required=True)
-                ],
-                handler=self._get_dealer_profile
-            ),
-            "get_payment_status": Tool(
-                name="get_payment_status",
-                description="Get dealer payment status including outstanding and overdue amounts",
-                parameters=[
-                    ToolParameter(name="dealer_id", type="string", required=True)
-                ],
-                handler=self._get_payment_status
-            ),
-            "get_order_history": Tool(
-                name="get_order_history",
-                description="Get recent order history for a dealer",
-                parameters=[
-                    ToolParameter(name="dealer_id", type="string", required=True),
-                    ToolParameter(name="limit", type="integer", required=False, default=5)
-                ],
-                handler=self._get_order_history
-            ),
-            "get_dealer_health_score": Tool(
-                name="get_dealer_health_score",
-                description="Calculate dealer health score based on order patterns, payments, and engagement",
-                parameters=[
-                    ToolParameter(name="dealer_id", type="string", required=True)
-                ],
-                handler=self._get_dealer_health_score
-            ),
-            "resolve_entity": Tool(
-                name="resolve_entity",
-                description="Resolve a fuzzy entity name to its ID using fuzzy matching",
-                parameters=[
-                    ToolParameter(name="entity_type", type="string", required=True),
-                    ToolParameter(name="entity_name", type="string", required=True),
-                    ToolParameter(name="context", type="object", required=False)
-                ],
-                handler=self._resolve_entity
-            ),
-            "create_visit_record": Tool(
-                name="create_visit_record",
-                description="Create a new visit record in the database",
-                parameters=[
-                    ToolParameter(name="dealer_id", type="string", required=True),
-                    ToolParameter(name="sales_rep_id", type="string", required=True),
-                    ToolParameter(name="visit_date", type="string", required=True),
-                    ToolParameter(name="outcome", type="string", required=False),
-                    ToolParameter(name="conversation_notes", type="string", required=False),
-                    ToolParameter(name="payment_collected", type="number", required=False),
-                    ToolParameter(name="payment_method", type="string", required=False)
-                ],
-                handler=self._create_visit_record
-            ),
-            "create_commitment": Tool(
-                name="create_commitment",
-                description="Create a new commitment record linked to a visit",
-                parameters=[
-                    ToolParameter(name="visit_id", type="string", required=True),
-                    ToolParameter(name="dealer_id", type="string", required=True),
-                    ToolParameter(name="product_id", type="string", required=False),
-                    ToolParameter(name="quantity", type="integer", required=True),
-                    ToolParameter(name="timeframe", type="string", required=True),
-                    ToolParameter(name="confidence", type="number", required=False)
-                ],
-                handler=self._create_commitment
-            ),
-            "suggest_visit_plan": Tool(
-                name="suggest_visit_plan",
-                description="Generate prioritized list of dealers to visit based on urgency factors",
-                parameters=[
-                    ToolParameter(name="sales_rep_id", type="string", required=True),
-                    ToolParameter(name="max_dealers", type="integer", required=False, default=6)
-                ],
-                handler=self._suggest_visit_plan
-            ),
-            "get_rep_metrics": Tool(
-                name="get_rep_metrics",
-                description="Get performance metrics for a sales representative",
-                parameters=[
-                    ToolParameter(name="sales_rep_id", type="string", required=True),
-                    ToolParameter(name="period", type="string", required=False, default="current_month")
-                ],
-                handler=self._get_rep_metrics
-            ),
-            "get_pending_commitments": Tool(
-                name="get_pending_commitments",
-                description="Get pending (unfulfilled) commitments for a dealer",
-                parameters=[
-                    ToolParameter(name="dealer_id", type="string", required=True)
-                ],
-                handler=self._get_pending_commitments
-            ),
-            "get_rep_dealers": Tool(
-                name="get_rep_dealers",
-                description="Get list of dealers assigned to a sales representative",
-                parameters=[
-                    ToolParameter(name="user_id", type="string", required=True)
-                ],
-                handler=self._get_rep_dealers
-            ),
-            "get_products": Tool(
-                name="get_products",
-                description="Get list of all products",
-                parameters=[],
-                handler=self._get_products
-            )
+    if function == 'get_pending_commitments':
+        result = get_pending_commitments(parameters['dealer_id'])
+    elif function == 'consume_commitment':
+        result = consume_commitment(
+            parameters['commitment_id'],
+            int(parameters['order_quantity'])
+        )
+    elif function == 'check_inventory':
+        result = check_inventory(
+            parameters['product_id'],
+            int(parameters['quantity'])
+        )
+    elif function == 'create_order':
+        result = create_order(parameters)
+    elif function == 'get_forecast_consumption':
+        result = get_forecast_consumption(parameters.get('days', 30))
+    elif function == 'generate_alert':
+        result = generate_alert(parameters)
+    else:
+        result = {'error': f'Unknown function: {function}'}
+    
+    return format_response(event['actionGroup'], function, result)
+
+def get_pending_commitments(dealer_id):
+    """Get unfulfilled commitments for a dealer."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT c.*, p.name as product_name
+        FROM commitments c
+        LEFT JOIN products p ON c.product_id = p.id
+        WHERE c.dealer_id = ? AND c.status IN ('pending', 'partial')
+        ORDER BY c.expected_date ASC
+    """, (dealer_id,))
+    
+    commitments = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return {'commitments': commitments}
+
+def consume_commitment(commitment_id, order_quantity):
+    """
+    Match an order against a commitment using forecast consumption logic.
+    
+    Consumption Logic:
+    1. Get the commitment
+    2. Calculate consumed quantity
+    3. Update commitment status (partial if remaining, fulfilled if complete)
+    4. Return consumption result
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Get commitment
+    cursor.execute("""
+        SELECT * FROM commitments WHERE id = ?
+    """, (commitment_id,))
+    commitment = cursor.fetchone()
+    
+    if not commitment:
+        conn.close()
+        return {'error': 'Commitment not found'}
+    
+    remaining_qty = commitment['quantity_promised'] - commitment['quantity_consumed']
+    consume_qty = min(order_quantity, remaining_qty)
+    new_consumed = commitment['quantity_consumed'] + consume_qty
+    
+    # Update commitment
+    if new_consumed >= commitment['quantity_promised']:
+        new_status = 'fulfilled'
+    else:
+        new_status = 'partial'
+    
+    cursor.execute("""
+        UPDATE commitments 
+        SET quantity_consumed = ?, status = ?, updated_at = ?
+        WHERE id = ?
+    """, (new_consumed, new_status, datetime.now().isoformat(), commitment_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        'commitment_id': commitment_id,
+        'consumed_quantity': consume_qty,
+        'remaining_quantity': commitment['quantity_promised'] - new_consumed,
+        'status': new_status,
+        'order_remaining': order_quantity - consume_qty
+    }
+
+def check_inventory(product_id, quantity):
+    """
+    Check available-to-promise (ATP) quantity.
+    
+    ATP = Current Stock - Reserved - Committed (pending orders)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Get current stock
+    cursor.execute("""
+        SELECT COALESCE(SUM(quantity), 0) as current_stock
+        FROM inventory WHERE product_id = ?
+    """, (product_id,))
+    current_stock = cursor.fetchone()[0]
+    
+    # Get reserved quantity (pending orders not yet shipped)
+    cursor.execute("""
+        SELECT COALESCE(SUM(oi.quantity), 0) as reserved
+        FROM order_items oi
+        JOIN orders o ON oi.order_id = o.id
+        WHERE oi.product_id = ? AND o.status IN ('pending', 'confirmed')
+    """, (product_id,))
+    reserved = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    available = current_stock - reserved
+    can_fulfill = available >= quantity
+    
+    return {
+        'product_id': product_id,
+        'requested_quantity': quantity,
+        'current_stock': current_stock,
+        'reserved': reserved,
+        'available_to_promise': available,
+        'can_fulfill': can_fulfill,
+        'shortfall': max(0, quantity - available) if not can_fulfill else 0
+    }
+
+def get_forecast_consumption(days=30):
+    """
+    Get forecast consumption summary showing commitments vs actual orders.
+    
+    This implements backward/forward consumption logic summary:
+    - Shows commitments by period
+    - Shows actual orders matched
+    - Shows consumption rate
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Get commitments and their fulfillment
+    cursor.execute("""
+        SELECT 
+            strftime('%Y-%W', c.expected_date) as period,
+            SUM(c.quantity_promised) as committed_qty,
+            SUM(c.quantity_consumed) as consumed_qty,
+            COUNT(CASE WHEN c.status = 'fulfilled' THEN 1 END) as fulfilled_count,
+            COUNT(CASE WHEN c.status = 'missed' THEN 1 END) as missed_count,
+            COUNT(*) as total_commitments
+        FROM commitments c
+        WHERE c.expected_date >= date('now', '-' || ? || ' days')
+          AND c.expected_date <= date('now', '+' || ? || ' days')
+        GROUP BY period
+        ORDER BY period
+    """, (days, days))
+    
+    periods = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    # Calculate overall metrics
+    total_committed = sum(p['committed_qty'] or 0 for p in periods)
+    total_consumed = sum(p['consumed_qty'] or 0 for p in periods)
+    
+    return {
+        'periods': periods,
+        'summary': {
+            'total_committed': total_committed,
+            'total_consumed': total_consumed,
+            'consumption_rate': round(total_consumed / total_committed * 100, 1) if total_committed > 0 else 0,
+            'period_days': days
         }
+    }
+
+def generate_alert(params):
+    """Generate manager alert for critical situations."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    async def call(self, tool_name: str, params: Dict[str, Any]) -> Any:
-        """Execute a tool by name with given parameters."""
-        if tool_name not in self.tools:
-            raise ValueError(f"Unknown tool: {tool_name}")
-        
-        tool = self.tools[tool_name]
-        return await tool.handler(**params)
+    cursor.execute("""
+        INSERT INTO alerts (alert_type, entity_type, entity_id, message, severity, status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+    """, (
+        params['alert_type'],
+        params['entity_type'],
+        params['entity_id'],
+        params['message'],
+        params.get('severity', 'medium'),
+        datetime.now().isoformat()
+    ))
+    
+    alert_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    return {'alert_id': alert_id, 'status': 'created'}
+
+def format_response(action_group, function, result):
+    """Format Lambda response for Bedrock Agent."""
+    return {
+        'messageVersion': '1.0',
+        'response': {
+            'actionGroup': action_group,
+            'function': function,
+            'functionResponse': {
+                'responseBody': {
+                    'TEXT': {'body': json.dumps(result)}
+                }
+            }
+        }
+    }
 ```
 
 ## Data Models
 
 ### Core Business Entities (SQLite Schema)
 
-```python
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
-from datetime import datetime
+```sql
+-- Dealer Master
+CREATE TABLE dealers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    phone TEXT,
+    email TEXT,
+    contact_person TEXT,
+    street TEXT,
+    city TEXT,
+    state TEXT,
+    pincode TEXT,
+    territory_id TEXT REFERENCES territories(id),
+    sales_rep_id TEXT REFERENCES sales_persons(id),
+    credit_limit REAL DEFAULT 100000,
+    payment_terms INTEGER DEFAULT 30,
+    status TEXT DEFAULT 'active',
+    category TEXT DEFAULT 'B',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-Base = declarative_base()
+-- Products
+CREATE TABLE products (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    category TEXT,
+    unit_price REAL NOT NULL,
+    unit_of_measure TEXT DEFAULT 'units',
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-class Dealer(Base):
-    """Dealer/retailer who purchases products for resale."""
-    __tablename__ = "dealers"
-    
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    code = Column(String, unique=True, nullable=False)
-    
-    # Contact Information
-    phone = Column(String)
-    email = Column(String)
-    contact_person = Column(String)
-    
-    # Address
-    street = Column(String)
-    city = Column(String)
-    state = Column(String)
-    pincode = Column(String)
-    
-    # Business Terms
-    credit_limit = Column(Float, default=0.0)
-    payment_terms_days = Column(Integer, default=30)
-    
-    # Relationships
-    territory_id = Column(String, ForeignKey("territories.id"))
-    
-    # Status
-    status = Column(String, default="active")  # active, inactive, blocked
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    territory = relationship("Territory", back_populates="dealers")
-    orders = relationship("PurchaseOrder", back_populates="dealer")
-    visits = relationship("Visit", back_populates="dealer")
-    commitments = relationship("Commitment", back_populates="dealer")
+-- Inventory
+CREATE TABLE inventory (
+    id TEXT PRIMARY KEY,
+    product_id TEXT REFERENCES products(id),
+    location TEXT DEFAULT 'main_warehouse',
+    quantity INTEGER DEFAULT 0,
+    reserved_quantity INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
+-- Orders
+CREATE TABLE orders (
+    id TEXT PRIMARY KEY,
+    order_number TEXT UNIQUE NOT NULL,
+    dealer_id TEXT REFERENCES dealers(id),
+    sales_rep_id TEXT REFERENCES sales_persons(id),
+    order_date DATE NOT NULL,
+    status TEXT DEFAULT 'pending',
+    total_amount REAL,
+    discount_amount REAL DEFAULT 0,
+    notes TEXT,
+    source TEXT DEFAULT 'field_visit',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-class Territory(Base):
-    """Geographic region containing multiple dealers."""
-    __tablename__ = "territories"
-    
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    region = Column(String)  # North, South, East, West
-    
-    # Relationships
-    dealers = relationship("Dealer", back_populates="territory")
-    assignments = relationship("TerritoryAssignment", back_populates="territory")
+-- Order Items
+CREATE TABLE order_items (
+    id TEXT PRIMARY KEY,
+    order_id TEXT REFERENCES orders(id),
+    product_id TEXT REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    unit_price REAL NOT NULL,
+    discount_percent REAL DEFAULT 0,
+    amount REAL NOT NULL
+);
 
+-- Invoices
+CREATE TABLE invoices (
+    id TEXT PRIMARY KEY,
+    invoice_number TEXT UNIQUE NOT NULL,
+    order_id TEXT REFERENCES orders(id),
+    dealer_id TEXT REFERENCES dealers(id),
+    invoice_date DATE NOT NULL,
+    due_date DATE NOT NULL,
+    total_amount REAL NOT NULL,
+    status TEXT DEFAULT 'pending'
+);
 
-class SalesRep(Base):
-    """Sales representative who visits dealers."""
-    __tablename__ = "sales_reps"
-    
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    email = Column(String, unique=True)
-    phone = Column(String)
-    employee_id = Column(String, unique=True)
-    telegram_user_id = Column(String, unique=True)  # For bot authentication
-    
-    # Manager reference
-    manager_id = Column(String, ForeignKey("sales_reps.id"), nullable=True)
-    is_manager = Column(Boolean, default=False)
-    
-    status = Column(String, default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    assignments = relationship("TerritoryAssignment", back_populates="sales_rep")
-    visits = relationship("Visit", back_populates="sales_rep")
-    orders = relationship("PurchaseOrder", back_populates="sales_rep")
+-- Payments
+CREATE TABLE payments (
+    id TEXT PRIMARY KEY,
+    invoice_id TEXT REFERENCES invoices(id),
+    dealer_id TEXT REFERENCES dealers(id),
+    amount REAL NOT NULL,
+    payment_date DATE NOT NULL,
+    payment_method TEXT,
+    collected_by TEXT REFERENCES sales_persons(id),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
+-- Visits
+CREATE TABLE visits (
+    id TEXT PRIMARY KEY,
+    dealer_id TEXT REFERENCES dealers(id),
+    sales_rep_id TEXT REFERENCES sales_persons(id),
+    visit_date DATE NOT NULL,
+    visit_type TEXT DEFAULT 'planned',
+    purpose TEXT,
+    outcome TEXT,
+    conversation_notes TEXT,
+    payment_collected REAL,
+    payment_method TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-class TerritoryAssignment(Base):
-    """Assignment of sales rep to territory."""
-    __tablename__ = "territory_assignments"
-    
-    id = Column(String, primary_key=True)
-    sales_rep_id = Column(String, ForeignKey("sales_reps.id"), nullable=False)
-    territory_id = Column(String, ForeignKey("territories.id"), nullable=False)
-    assigned_date = Column(DateTime, default=datetime.utcnow)
-    is_primary = Column(Boolean, default=True)
-    
-    # Relationships
-    sales_rep = relationship("SalesRep", back_populates="assignments")
-    territory = relationship("Territory", back_populates="assignments")
+-- Commitments
+CREATE TABLE commitments (
+    id TEXT PRIMARY KEY,
+    visit_id TEXT REFERENCES visits(id),
+    dealer_id TEXT REFERENCES dealers(id),
+    product_id TEXT REFERENCES products(id),
+    quantity_promised INTEGER NOT NULL,
+    quantity_consumed INTEGER DEFAULT 0,
+    expected_date DATE,
+    status TEXT DEFAULT 'pending',
+    confidence REAL DEFAULT 0.8,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
+-- Alerts
+CREATE TABLE alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    severity TEXT DEFAULT 'medium',
+    status TEXT DEFAULT 'pending',
+    assigned_to TEXT REFERENCES sales_persons(id),
+    resolved_by TEXT,
+    resolved_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-class Product(Base):
-    """Product in the catalog."""
-    __tablename__ = "products"
-    
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    code = Column(String, unique=True, nullable=False)
-    category = Column(String)
-    unit_price = Column(Float)
-    unit_of_measure = Column(String, default="units")  # units, cases, kg, etc.
-    description = Column(Text)
-    status = Column(String, default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
+-- Sales Persons
+CREATE TABLE sales_persons (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    telegram_id TEXT UNIQUE,
+    role TEXT DEFAULT 'sales_rep',
+    manager_id TEXT REFERENCES sales_persons(id),
+    territory_id TEXT REFERENCES territories(id),
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
+-- Territories
+CREATE TABLE territories (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    region TEXT,
+    state TEXT,
+    status TEXT DEFAULT 'active'
+);
 
-class PurchaseOrder(Base):
-    """Order placed by a dealer."""
-    __tablename__ = "purchase_orders"
-    
-    id = Column(String, primary_key=True)
-    order_number = Column(String, unique=True, nullable=False)
-    dealer_id = Column(String, ForeignKey("dealers.id"), nullable=False)
-    sales_rep_id = Column(String, ForeignKey("sales_reps.id"))
-    
-    order_date = Column(DateTime, nullable=False)
-    expected_delivery_date = Column(DateTime)
-    
-    total_amount = Column(Float, default=0.0)
-    status = Column(String, default="pending")  # pending, confirmed, delivered, cancelled
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    dealer = relationship("Dealer", back_populates="orders")
-    sales_rep = relationship("SalesRep", back_populates="orders")
-    line_items = relationship("OrderLineItem", back_populates="order")
-    invoices = relationship("Invoice", back_populates="order")
+-- Sales Targets
+CREATE TABLE sales_targets (
+    id TEXT PRIMARY KEY,
+    sales_rep_id TEXT REFERENCES sales_persons(id),
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    sales_target REAL NOT NULL,
+    collection_target REAL NOT NULL,
+    visit_target INTEGER
+);
 
+-- Entity Aliases (for fuzzy matching)
+CREATE TABLE entity_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    UNIQUE(entity_type, entity_id, alias)
+);
 
-class OrderLineItem(Base):
-    """Individual line item in an order."""
-    __tablename__ = "order_line_items"
-    
-    id = Column(String, primary_key=True)
-    order_id = Column(String, ForeignKey("purchase_orders.id"), nullable=False)
-    product_id = Column(String, ForeignKey("products.id"), nullable=False)
-    
-    quantity = Column(Integer, nullable=False)
-    unit_price = Column(Float, nullable=False)
-    line_total = Column(Float, nullable=False)
-    
-    # Relationships
-    order = relationship("PurchaseOrder", back_populates="line_items")
-    product = relationship("Product")
-
-
-class Invoice(Base):
-    """Invoice generated against an order."""
-    __tablename__ = "invoices"
-    
-    id = Column(String, primary_key=True)
-    invoice_number = Column(String, unique=True, nullable=False)
-    order_id = Column(String, ForeignKey("purchase_orders.id"))
-    dealer_id = Column(String, ForeignKey("dealers.id"), nullable=False)
-    
-    invoice_date = Column(DateTime, nullable=False)
-    due_date = Column(DateTime, nullable=False)
-    
-    total_amount = Column(Float, nullable=False)
-    paid_amount = Column(Float, default=0.0)
-    
-    status = Column(String, default="pending")  # pending, partial, paid, overdue
-    
-    # Relationships
-    order = relationship("PurchaseOrder", back_populates="invoices")
-    dealer = relationship("Dealer")
-    payments = relationship("Payment", back_populates="invoice")
-
-
-class Payment(Base):
-    """Payment received from a dealer."""
-    __tablename__ = "payments"
-    
-    id = Column(String, primary_key=True)
-    invoice_id = Column(String, ForeignKey("invoices.id"), nullable=False)
-    dealer_id = Column(String, ForeignKey("dealers.id"), nullable=False)
-    
-    amount = Column(Float, nullable=False)
-    payment_date = Column(DateTime, nullable=False)
-    payment_method = Column(String)  # cash, UPI, cheque, bank_transfer
-    reference_number = Column(String)
-    
-    collected_by = Column(String, ForeignKey("sales_reps.id"))
-    
-    # Relationships
-    invoice = relationship("Invoice", back_populates="payments")
-    dealer = relationship("Dealer")
-
-
-class Visit(Base):
-    """Record of a sales rep visit to a dealer."""
-    __tablename__ = "visits"
-    
-    id = Column(String, primary_key=True)
-    dealer_id = Column(String, ForeignKey("dealers.id"), nullable=False)
-    sales_rep_id = Column(String, ForeignKey("sales_reps.id"), nullable=False)
-    
-    visit_date = Column(DateTime, nullable=False)
-    visit_type = Column(String, default="regular")  # regular, collection, complaint, new_product
-    
-    outcome = Column(String)  # successful, follow_up_needed, not_available
-    conversation_notes = Column(Text)  # Raw notes from sales rep
-    
-    # Payment collection during visit
-    payment_collected = Column(Float, default=0.0)
-    payment_method = Column(String)
-    
-    # Extraction metadata
-    extraction_status = Column(String, default="pending")  # pending, completed, failed
-    extraction_confidence = Column(Float)
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    dealer = relationship("Dealer", back_populates="visits")
-    sales_rep = relationship("SalesRep", back_populates="visits")
-    commitments = relationship("Commitment", back_populates="visit")
-
-
-class Commitment(Base):
-    """Dealer commitment extracted from visit conversation."""
-    __tablename__ = "commitments"
-    
-    id = Column(String, primary_key=True)
-    visit_id = Column(String, ForeignKey("visits.id"), nullable=False)
-    dealer_id = Column(String, ForeignKey("dealers.id"), nullable=False)
-    
-    product_id = Column(String, ForeignKey("products.id"), nullable=True)  # Null if generic commitment
-    quantity = Column(Integer, nullable=False)
-    
-    # Timeframe as stated by dealer
-    timeframe_text = Column(String, nullable=False)  # "next week", "by Tuesday"
-    expected_date = Column(DateTime)  # Parsed expected date
-    
-    # Tracking
-    status = Column(String, default="pending")  # pending, fulfilled, partial, missed
-    fulfilled_date = Column(DateTime)
-    fulfilled_quantity = Column(Integer)
-    fulfillment_order_id = Column(String, ForeignKey("purchase_orders.id"))
-    
-    # Extraction metadata
-    confidence = Column(Float, nullable=False)
-    extracted_text = Column(Text)  # Original text from which commitment was extracted
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    visit = relationship("Visit", back_populates="commitments")
-    dealer = relationship("Dealer", back_populates="commitments")
-    product = relationship("Product")
-
-
-class SalesTarget(Base):
-    """Sales targets for representatives."""
-    __tablename__ = "sales_targets"
-    
-    id = Column(String, primary_key=True)
-    sales_rep_id = Column(String, ForeignKey("sales_reps.id"), nullable=False)
-    
-    period_start = Column(DateTime, nullable=False)
-    period_end = Column(DateTime, nullable=False)
-    
-    sales_target = Column(Float, nullable=False)
-    collection_target = Column(Float, nullable=False)
-    visit_target = Column(Integer, nullable=False)  # Number of dealers to visit
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class EntityAlias(Base):
-    """Aliases for entity name resolution."""
-    __tablename__ = "entity_aliases"
-    
-    id = Column(String, primary_key=True)
-    entity_type = Column(String, nullable=False)  # dealer, product
-    entity_id = Column(String, nullable=False)
-    alias = Column(String, nullable=False)
-    
-    # Who created this alias (for learning from corrections)
-    created_by = Column(String, ForeignKey("sales_reps.id"))
-    created_at = Column(DateTime, default=datetime.utcnow)
+-- Indexes for performance
+CREATE INDEX idx_dealers_territory ON dealers(territory_id);
+CREATE INDEX idx_dealers_sales_rep ON dealers(sales_rep_id);
+CREATE INDEX idx_orders_dealer ON orders(dealer_id);
+CREATE INDEX idx_orders_date ON orders(order_date);
+CREATE INDEX idx_commitments_dealer ON commitments(dealer_id);
+CREATE INDEX idx_commitments_status ON commitments(status);
+CREATE INDEX idx_commitments_expected ON commitments(expected_date);
+CREATE INDEX idx_visits_dealer ON visits(dealer_id);
+CREATE INDEX idx_payments_dealer ON payments(dealer_id);
+CREATE INDEX idx_alerts_status ON alerts(status);
 ```
 
-## Dealer Health Score Algorithm
+## Algorithms
+
+### Dealer Health Score Calculation
 
 ```python
-from datetime import datetime, timedelta
-from typing import Dict, Any
-
-def calculate_dealer_health_score(
-    dealer_id: str,
-    db_session
-) -> Dict[str, Any]:
+def calculate_health_score(dealer_id: str) -> Dict[str, Any]:
     """
-    Calculate dealer health score (0-100) based on multiple factors.
+    Calculate dealer health score using weighted factors.
     
-    Formula:
-    HEALTH_SCORE = (
-        ORDER_RECENCY_SCORE * 0.25 +
-        ORDER_FREQUENCY_SCORE * 0.25 +
-        PAYMENT_BEHAVIOR_SCORE * 0.25 +
-        GROWTH_TREND_SCORE * 0.25
-    )
+    Components (each 25%):
+    1. Order Recency: Days since last order
+    2. Order Frequency: Order count vs expected
+    3. Payment Behavior: On-time payment rate
+    4. Commitment Fulfillment: Conversion rate
     
-    Returns score and breakdown of factors.
+    Returns score 0-100 with status and reasons.
     """
+    # Recency Score (25%)
+    days_since_order = get_days_since_last_order(dealer_id)
+    recency_score = max(0, 100 - (days_since_order * 2))  # -2 points per day
     
-    today = datetime.utcnow()
+    # Frequency Score (25%)
+    orders_last_6_months = get_order_count(dealer_id, months=6)
+    expected_orders = 6  # 1 per month average
+    frequency_score = min(100, (orders_last_6_months / expected_orders) * 100)
     
-    # Get recent orders (last 90 days)
-    orders = get_dealer_orders(dealer_id, days=90)
+    # Payment Score (25%)
+    on_time_rate = get_on_time_payment_rate(dealer_id)
+    payment_score = on_time_rate * 100
     
-    # Get payment history (last 90 days)
-    payments = get_dealer_payments(dealer_id, days=90)
+    # Fulfillment Score (25%)
+    fulfillment_rate = get_commitment_fulfillment_rate(dealer_id)
+    fulfillment_score = fulfillment_rate * 100
     
-    # 1. Order Recency Score (0-100)
-    # Full score if ordered within 7 days, decreasing after
-    if orders:
-        days_since_last_order = (today - orders[0].order_date).days
-        if days_since_last_order <= 7:
-            order_recency_score = 100
-        elif days_since_last_order <= 14:
-            order_recency_score = 80
-        elif days_since_last_order <= 21:
-            order_recency_score = 60
-        elif days_since_last_order <= 30:
-            order_recency_score = 40
-        else:
-            order_recency_score = max(0, 40 - (days_since_last_order - 30) * 2)
-    else:
-        order_recency_score = 0
-        days_since_last_order = 999
-    
-    # 2. Order Frequency Score (0-100)
-    # Based on number of orders in last 90 days
-    order_count = len(orders)
-    expected_orders = 6  # Assume ~2 orders/month is healthy
-    order_frequency_score = min(100, (order_count / expected_orders) * 100)
-    
-    # 3. Payment Behavior Score (0-100)
-    # Based on on-time payment rate
-    total_invoices = get_dealer_invoices(dealer_id, days=90)
-    on_time_payments = sum(1 for inv in total_invoices if inv.paid_amount >= inv.total_amount and inv.payment_date <= inv.due_date)
-    if total_invoices:
-        payment_score = (on_time_payments / len(total_invoices)) * 100
-    else:
-        payment_score = 50  # Neutral if no history
-    
-    # 4. Growth Trend Score (0-100)
-    # Compare last 45 days vs previous 45 days
-    recent_value = sum(o.total_amount for o in orders if (today - o.order_date).days <= 45)
-    previous_value = sum(o.total_amount for o in orders if 45 < (today - o.order_date).days <= 90)
-    
-    if previous_value > 0:
-        growth_rate = (recent_value - previous_value) / previous_value
-        if growth_rate >= 0.1:
-            growth_score = 100
-        elif growth_rate >= 0:
-            growth_score = 70
-        elif growth_rate >= -0.2:
-            growth_score = 40
-        else:
-            growth_score = 20
-    else:
-        growth_score = 50 if recent_value > 0 else 0
-    
-    # Calculate final score
-    health_score = (
-        order_recency_score * 0.25 +
-        order_frequency_score * 0.25 +
+    # Weighted total
+    total_score = (
+        recency_score * 0.25 +
+        frequency_score * 0.25 +
         payment_score * 0.25 +
-        growth_score * 0.25
+        fulfillment_score * 0.25
     )
     
     # Determine status
-    if health_score >= 80:
+    if total_score >= 70:
         status = "healthy"
-    elif health_score >= 60:
-        status = "watch"
-    elif health_score >= 40:
+    elif total_score >= 50:
         status = "at_risk"
     else:
         status = "critical"
     
     return {
-        "score": round(health_score),
+        "score": round(total_score),
         "status": status,
-        "days_since_last_order": days_since_last_order,
-        "breakdown": {
-            "order_recency": round(order_recency_score),
-            "order_frequency": round(order_frequency_score),
-            "payment_behavior": round(payment_score),
-            "growth_trend": round(growth_score)
+        "components": {
+            "recency": round(recency_score),
+            "frequency": round(frequency_score),
+            "payment": round(payment_score),
+            "fulfillment": round(fulfillment_score)
         }
     }
 ```
 
-## Visit Priority Algorithm
+### Forecast Consumption Algorithm
 
 ```python
-from datetime import datetime
-from typing import List, Dict, Any
-
-def calculate_visit_priority(
-    dealer_id: str,
-    db_session
-) -> Dict[str, Any]:
+def consume_forecast(dealer_id: str, product_id: str, order_qty: int) -> Dict[str, Any]:
     """
-    Calculate visit priority score for a dealer.
-    Higher score = more urgent to visit.
+    Match an order against commitments using backward/forward consumption.
     
-    Formula:
-    PRIORITY_SCORE = (
-        PAYMENT_URGENCY * 0.30 +
-        ORDER_URGENCY * 0.25 +
-        VISIT_RECENCY * 0.15 +
-        COMMITMENT_PENDING * 0.15 +
-        RELATIONSHIP_RISK * 0.15
+    Logic:
+    1. Get all pending commitments for dealer/product
+    2. Sort by expected_date (oldest first for backward consumption)
+    3. Consume oldest commitments first (backward consumption)
+    4. If backward exhausted, consume future commitments (forward consumption)
+    5. Return consumption summary
+    
+    Consumption Windows:
+    - Backward: Unlimited (consume all past due first)
+    - Forward: 7 days (only consume near-term future commitments)
+    """
+    remaining_qty = order_qty
+    consumed = []
+    
+    # Get pending commitments sorted by date
+    commitments = get_pending_commitments(
+        dealer_id, 
+        product_id,
+        order_by='expected_date ASC'
     )
+    
+    today = datetime.now().date()
+    forward_limit = today + timedelta(days=7)
+    
+    for commitment in commitments:
+        if remaining_qty <= 0:
+            break
+        
+        expected_date = commitment['expected_date']
+        
+        # Backward consumption (past due)
+        if expected_date <= today:
+            consume_qty = min(remaining_qty, commitment['remaining_qty'])
+            update_commitment(commitment['id'], consume_qty)
+            consumed.append({
+                'commitment_id': commitment['id'],
+                'consumed': consume_qty,
+                'type': 'backward'
+            })
+            remaining_qty -= consume_qty
+        
+        # Forward consumption (within window)
+        elif expected_date <= forward_limit:
+            consume_qty = min(remaining_qty, commitment['remaining_qty'])
+            update_commitment(commitment['id'], consume_qty)
+            consumed.append({
+                'commitment_id': commitment['id'],
+                'consumed': consume_qty,
+                'type': 'forward'
+            })
+            remaining_qty -= consume_qty
+    
+    return {
+        'order_qty': order_qty,
+        'consumed_from_commitments': order_qty - remaining_qty,
+        'unmatched_qty': remaining_qty,
+        'consumption_details': consumed
+    }
+```
+
+### Visit Priority Score Calculation
+
+```python
+def calculate_visit_priority(dealer_id: str) -> Dict[str, Any]:
     """
+    Calculate dealer visit priority score using weighted urgency factors.
     
-    today = datetime.utcnow()
-    reasons = []
+    Factors and Weights:
+    - Payment Urgency (30%): Based on overdue amount and days
+    - Order Urgency (25%): Days since last order
+    - Visit Recency (15%): Days since last visit
+    - Commitment Score (15%): Pending commitments about to expire
+    - Relationship Risk (15%): Based on health score
     
-    # 1. Payment Urgency (0-100)
+    Returns priority score, level, and recommended action.
+    """
+    # Payment Urgency (30%)
     payment_status = get_payment_status(dealer_id)
-    overdue_amount = payment_status.get("overdue_amount", 0)
-    days_overdue = payment_status.get("days_overdue", 0)
-    
-    if overdue_amount > 0:
-        # Score based on overdue amount and days
-        payment_urgency = min(100, 50 + (days_overdue * 2) + (overdue_amount / 10000))
-        reasons.append(f"₹{overdue_amount:,.0f} overdue ({days_overdue} days)")
+    if payment_status['overdue_amount'] > 0:
+        payment_urgency = min(100, (payment_status['days_overdue'] * 3) + 
+                             (payment_status['overdue_amount'] / 10000))
     else:
         payment_urgency = 0
     
-    # 2. Order Urgency (0-100)
+    # Order Urgency (25%)
     days_since_order = get_days_since_last_order(dealer_id)
-    if days_since_order > 30:
-        order_urgency = min(100, 50 + (days_since_order - 30) * 2)
-        reasons.append(f"No order in {days_since_order} days")
-    elif days_since_order > 20:
-        order_urgency = 40
-        reasons.append(f"No order in {days_since_order} days")
-    else:
-        order_urgency = 0
+    order_urgency = min(100, days_since_order * 2.5)
     
-    # 3. Visit Recency (0-100)
+    # Visit Recency (15%)
     days_since_visit = get_days_since_last_visit(dealer_id)
-    if days_since_visit > 14:
-        visit_recency = min(100, 30 + (days_since_visit - 14) * 3)
-        if days_since_visit > 21:
-            reasons.append(f"Not visited in {days_since_visit} days")
-    else:
-        visit_recency = 0
+    visit_recency = min(100, days_since_visit * 3)
     
-    # 4. Commitment Pending (0-100)
-    pending_commitments = get_pending_commitments(dealer_id)
-    commitment_score = 0
-    for commitment in pending_commitments:
-        days_until_due = (commitment.expected_date - today).days
-        if days_until_due <= 0:
-            commitment_score = 100
-            reasons.append(f"Commitment overdue!")
-            break
-        elif days_until_due <= 3:
-            commitment_score = max(commitment_score, 80)
-            reasons.append(f"Commitment due in {days_until_due} days")
-        elif days_until_due <= 7:
-            commitment_score = max(commitment_score, 50)
+    # Commitment Score (15%)
+    expiring_commitments = get_commitments_expiring_soon(dealer_id, days=3)
+    commitment_score = min(100, len(expiring_commitments) * 25)
     
-    # 5. Relationship Risk (0-100)
-    health = calculate_dealer_health_score(dealer_id, db_session)
-    relationship_risk = max(0, 100 - health["score"])
-    if health["status"] in ["at_risk", "critical"]:
-        reasons.append(f"Health score: {health['score']}")
+    # Relationship Risk (15%)
+    health = get_dealer_health_score(dealer_id)
+    relationship_risk = max(0, 100 - health['score'])
     
-    # Calculate final priority score
+    # Calculate weighted score
     priority_score = (
         payment_urgency * 0.30 +
         order_urgency * 0.25 +
@@ -1467,119 +1250,153 @@ def calculate_visit_priority(
         relationship_risk * 0.15
     )
     
-    # Determine priority level
+    # Determine priority level and action
     if priority_score >= 70:
         priority = "high"
+        if payment_urgency >= 50:
+            action = "Collection priority"
+        elif commitment_score >= 50:
+            action = "Close pending commitment"
+        else:
+            action = "Urgent attention needed"
     elif priority_score >= 40:
         priority = "medium"
+        action = "Regular follow-up"
     else:
         priority = "low"
-    
-    # Suggest action
-    if payment_urgency >= 50:
-        suggested_action = "Collection priority"
-    elif commitment_score >= 50:
-        suggested_action = "Close pending commitment"
-    elif order_urgency >= 50:
-        suggested_action = "Generate new order"
-    else:
-        suggested_action = "Relationship maintenance"
+        action = "Relationship maintenance"
     
     return {
         "priority_score": round(priority_score),
         "priority": priority,
-        "reasons": reasons[:3],  # Top 3 reasons
-        "suggested_action": suggested_action
+        "suggested_action": action,
+        "factors": {
+            "payment_urgency": round(payment_urgency),
+            "order_urgency": round(order_urgency),
+            "visit_recency": round(visit_recency),
+            "commitment_score": round(commitment_score),
+            "relationship_risk": round(relationship_risk)
+        }
     }
 ```
 
-## Correctness Properties
+## AWS Deployment Architecture
 
-*Properties define expected system behaviors that should hold true across all valid inputs.*
+```mermaid
+graph TB
+    subgraph "Frontend"
+        CF[CloudFront]
+        S3_WEB[S3 - React App]
+        AMPLIFY[Amplify]
+    end
+    
+    subgraph "API Layer"
+        APIGW[API Gateway]
+        LAMBDA_WH[Lambda - Telegram Webhook]
+        LAMBDA_API[Lambda - REST API]
+    end
+    
+    subgraph "Agent Layer"
+        BEDROCK[Amazon Bedrock]
+        SUPERVISOR[Supervisor Agent]
+        VISIT_AGENT[Visit Capture Agent]
+        DEALER_AGENT[Dealer Intelligence Agent]
+        ORDER_AGENT[Order Planning Agent]
+    end
+    
+    subgraph "Action Groups"
+        AG_DEALER[Dealer Actions Lambda]
+        AG_VISIT[Visit Actions Lambda]
+        AG_ORDER[Order Actions Lambda]
+        AG_ANALYTICS[Analytics Actions Lambda]
+    end
+    
+    subgraph "Data Layer"
+        S3_DB[S3 - SQLite DB]
+        EFS[EFS - Shared DB]
+    end
+    
+    subgraph "Monitoring"
+        CW[CloudWatch]
+        XRAY[X-Ray]
+    end
+    
+    CF --> S3_WEB
+    AMPLIFY --> S3_WEB
+    
+    APIGW --> LAMBDA_WH
+    APIGW --> LAMBDA_API
+    
+    LAMBDA_WH --> SUPERVISOR
+    LAMBDA_API --> SUPERVISOR
+    
+    SUPERVISOR --> VISIT_AGENT
+    SUPERVISOR --> DEALER_AGENT
+    SUPERVISOR --> ORDER_AGENT
+    
+    VISIT_AGENT --> AG_VISIT
+    DEALER_AGENT --> AG_DEALER
+    DEALER_AGENT --> AG_ANALYTICS
+    ORDER_AGENT --> AG_ORDER
+    
+    AG_DEALER --> EFS
+    AG_VISIT --> EFS
+    AG_ORDER --> EFS
+    AG_ANALYTICS --> EFS
+    
+    BEDROCK --> CW
+    LAMBDA_WH --> CW
+    AG_DEALER --> CW
+```
+
+## Correctness Properties
 
 ### Visit Capture Properties
 
 **Property 1: Entity Resolution Accuracy**
 *For any* dealer name input with fuzzy variations (typos, abbreviations, partial names), the system should match to the correct dealer with confidence score ≥ 0.7 when the dealer exists in the assigned territory.
-**Validates: Requirements 1.1, 1.7**
 
 **Property 2: Commitment Extraction Completeness**
 *For any* visit notes containing commitment language (quantity + timeframe), the Visit Capture Agent should extract all commitment information with product, quantity, and timeframe fields populated.
-**Validates: Requirements 1.2**
 
 **Property 3: Payment Extraction Accuracy**
 *For any* visit notes mentioning payment collection with amount, the system should correctly extract the payment amount in INR, regardless of format (45K, 45000, 45,000).
-**Validates: Requirements 1.3**
 
 **Property 4: Confirmation Before Save**
 *For any* extracted visit data, the system must present a confirmation summary to the user and receive explicit confirmation before persisting to the database.
-**Validates: Requirements 1.5, 1.6**
 
-**Property 5: Low Confidence Handling**
-*For any* entity resolution with confidence < 0.7, the system should present clarification options to the user rather than auto-selecting.
-**Validates: Requirements 1.7**
+### Order Planning Properties
+
+**Property 5: Commitment Consumption Order**
+*For any* order that matches against commitments, backward consumption (oldest first) must be applied before forward consumption.
+
+**Property 6: ATP Accuracy**
+*For any* inventory check, ATP must equal current stock minus reserved minus pending order quantities.
+
+**Property 7: Partial Fulfillment Tracking**
+*For any* commitment that is partially fulfilled by an order, the remaining quantity must be tracked and status updated to 'partial'.
+
+**Property 8: Missed Commitment Detection**
+*For any* commitment whose expected date has passed without fulfillment, status must be updated to 'missed' within 24 hours.
 
 ### Dealer Intelligence Properties
 
-**Property 6: Briefing Completeness**
-*For any* dealer briefing request, the response must include: dealer name, credit limit, outstanding amount, days overdue (if any), last 3 orders, and pending commitments.
-**Validates: Requirements 2.2, 2.3, 2.4**
+**Property 9: Health Score Bounds**
+*For any* dealer, health score must be within range [0, 100].
 
-**Property 7: Health Score Calculation**
-*For any* dealer with transaction history, the health score should be calculated using all four factors (recency, frequency, payment, growth) with equal weights.
-**Validates: Requirements 2.5**
-
-**Property 8: At-Risk Flagging**
-*For any* dealer with health score < 50, the system should flag them as "at_risk" or "critical" in all relevant outputs.
-**Validates: Requirements 2.5**
-
-### Visit Planning Properties
-
-**Property 9: Priority Score Consistency**
+**Property 10: Priority Score Consistency**
 *For any* two dealers where Dealer A has higher overdue amount AND more days since last order than Dealer B, Dealer A should have a higher or equal priority score.
-**Validates: Requirements 3.2**
 
-**Property 10: Recommendation Limit**
-*For any* visit plan request, the system should return at most 8 dealer recommendations, prioritized by score.
-**Validates: Requirements 3.5**
+**Property 11: At-Risk Flagging**
+*For any* dealer with health score < 50, the system should flag them as "at_risk" or "critical" in all relevant outputs.
 
-**Property 11: Reason Transparency**
-*For any* dealer in the visit plan, at least one specific reason should be provided for why they need attention.
-**Validates: Requirements 3.3**
+### Manager Alert Properties
 
-### Dashboard Properties
+**Property 12: Alert Generation**
+*For any* dealer whose health score drops below 50, an alert must be generated within the same session.
 
-**Property 12: Metric Accuracy**
-*For any* dashboard request, sales and collection figures should match the sum of actual transactions in the database for the current period.
-**Validates: Requirements 4.1**
-
-**Property 13: Progress Calculation**
-*For any* progress metric, the percentage should be calculated as (achieved / target) × 100, capped at 100%.
-**Validates: Requirements 4.2**
-
-### Natural Language Properties
-
-**Property 14: Intent Classification**
-*For any* query containing dealer name + "status/briefing/info", the intent should be classified as DEALER_INQUIRY.
-**Validates: Requirements 6.1**
-
-**Property 15: Hinglish Handling**
-*For any* query in Hinglish (e.g., "Sharma ji ka payment kya hai"), the system should correctly identify intent and entities.
-**Validates: Requirements 6.5**
-
-**Property 16: Graceful Fallback**
-*For any* query that cannot be classified with confidence > 0.5, the system should ask for clarification rather than guessing.
-**Validates: Requirements 6.3, 6.4**
-
-### Data Integrity Properties
-
-**Property 17: Referential Integrity**
-*For any* visit record created, the dealer_id and sales_rep_id must reference existing records in their respective tables.
-**Validates: Requirements 8.1**
-
-**Property 18: Commitment Linkage**
-*For any* commitment record, it must be linked to a valid visit_id and dealer_id.
-**Validates: Requirements 8.1**
+**Property 13: Approval Routing**
+*For any* discount request exceeding threshold, the request must be routed to manager before order confirmation.
 
 ## Error Handling
 
@@ -1595,35 +1412,38 @@ def calculate_visit_priority(
 
 ### System Errors
 
-**Database Errors:**
-- Log error details internally
-- Show user: "Sorry, I couldn't save that right now. Please try again in a moment."
-- Maintain conversation state for retry
-
-**LLM Errors:**
-- Timeout: Retry once, then show simplified response based on cached/rule-based logic
+**Bedrock Agent Errors:**
+- Timeout: Retry once, then show simplified response
 - Rate limit: Queue request and inform user of brief delay
+
+**Lambda Errors:**
+- Database connection: Retry with exponential backoff
+- Timeout: Log and return partial results if available
 
 **Network Errors:**
 - Telegram: Messages are queued by Telegram, handle on reconnection
-- Database: Use SQLite's built-in retry mechanism
+- API Gateway: Return appropriate HTTP status codes
 
 ## Testing Strategy
 
 ### Unit Tests
 
-**Component Testing:**
-- Entity resolution accuracy with various fuzzy inputs
-- Health score calculation with different data scenarios
+**Lambda Function Testing:**
+- Test each action group function independently
+- Mock database connections
+- Validate response format matches Bedrock Agent expectations
+
+**Algorithm Testing:**
+- Health score calculation with various data scenarios
 - Priority score calculation edge cases
-- Date parsing for Hinglish timeframes ("next week", "agle hafte")
+- Forecast consumption logic with multiple commitments
 
 ### Integration Tests
 
 **End-to-End Flows:**
 - Complete visit logging flow (input → extraction → confirmation → save)
+- Order capture with commitment consumption
 - Dealer briefing retrieval with all data components
-- Visit plan generation with proper prioritization
 
 ### Property-Based Tests
 
@@ -1633,26 +1453,30 @@ Using Hypothesis framework:
 from hypothesis import given, strategies as st
 
 @given(
-    dealer_name=st.text(min_size=3, max_size=50),
-    amount=st.integers(min_value=100, max_value=10000000)
+    order_qty=st.integers(min_value=1, max_value=1000),
+    commitment_qty=st.integers(min_value=1, max_value=1000)
 )
-def test_payment_extraction_handles_all_formats(dealer_name, amount):
+def test_consumption_never_exceeds_order(order_qty, commitment_qty):
     """
-    Property 3: Payment extraction should work for various formats.
+    Property: Total consumed from commitments never exceeds order quantity.
     """
-    # Test formats: 45K, 45000, 45,000, Rs 45000, ₹45000
-    formats = [
-        f"{amount}",
-        f"{amount:,}",
-        f"{amount//1000}K" if amount >= 1000 else str(amount),
-        f"Rs {amount}",
-        f"₹{amount}"
-    ]
-    
-    for fmt in formats:
-        notes = f"Met {dealer_name}, collected {fmt}"
-        extracted = extract_payment_from_notes(notes)
-        assert extracted["amount"] == amount or extracted["amount"] == amount // 1000 * 1000
+    result = consume_forecast("dealer_1", "product_1", order_qty)
+    assert result['consumed_from_commitments'] <= order_qty
+
+@given(
+    recency=st.integers(min_value=0, max_value=365),
+    frequency=st.integers(min_value=0, max_value=20),
+    payment_rate=st.floats(min_value=0, max_value=1),
+    fulfillment_rate=st.floats(min_value=0, max_value=1)
+)
+def test_health_score_bounds(recency, frequency, payment_rate, fulfillment_rate):
+    """
+    Property: Health score is always between 0 and 100.
+    """
+    score = calculate_health_score_from_values(
+        recency, frequency, payment_rate, fulfillment_rate
+    )
+    assert 0 <= score <= 100
 ```
 
 ### Test Data
@@ -1663,3 +1487,4 @@ Synthetic data generator will create:
 - Payment records with realistic delays
 - Visit records with sample conversation notes
 - Commitments with various fulfillment statuses
+- Inventory records by product

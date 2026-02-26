@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The SupplyChain Copilot is an AI-powered assistant designed specifically for Indian MSMEs (Micro, Small, and Medium Enterprises) in the B2B distribution and retail supply chain sector. Unlike large enterprises that use sophisticated ERP systems like SAP or Salesforce, Indian MSMEs typically operate using WhatsApp groups, Excel spreadsheets, and paper notebooks. Field intelligence from sales representatives—such as dealer commitments like "Sharma ji will order 500 units next week"—remains trapped in informal conversations and never reaches business planning.
+The Retail SupplyChain Copilot is an AI-powered assistant designed specifically for Indian MSMEs (Micro, Small, and Medium Enterprises) in the B2B distribution and retail supply chain sector. Unlike large enterprises that use sophisticated ERP systems like SAP or Salesforce, Indian MSMEs typically operate using WhatsApp groups, Excel spreadsheets, and paper notebooks. Field intelligence from sales representatives—such as dealer commitments like "Sharma ji will order 500 units next week"—remains trapped in informal conversations and never reaches business planning.
 
 The system captures sales visit data through natural language conversations on Telegram, automatically extracts dealer commitments, and combines them with transactional history to provide actionable intelligence. Multiple specialized AI agents work together to help sales representatives prepare for dealer visits, plan their day efficiently, and give business owners visibility into their sales pipeline without requiring complex software training.
 
@@ -26,6 +26,7 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 - Month-end surprises on sales numbers
 - When a sales rep leaves, all dealer relationship knowledge leaves with them
 - Multiple visits needed for collections due to poor tracking
+- No forward-looking demand signal for inventory planning
 
 ### Why Existing Solutions Fail for MSMEs
 
@@ -66,6 +67,7 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 - Forgets pending commitments and follow-ups
 - Manual visit logging is tedious
 - No guidance on which dealers need attention
+- No real time visibility to current stock and future production capacity
 
 ### Secondary User: Sales Manager / Business Owner
 
@@ -77,9 +79,11 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 
 **Information Needs:**
 - Which dealers have committed to orders (pipeline)
-- Which dealers are at risk (declining orders, overdue payments)
+- Which dealers are at risk (declining orders, overdue payments, frustrated due to late delivery)
 - Team performance overview
 - Collection status
+- Forward-looking demand visibility (forecast consumption)
+- Alerts for critical situations requiring intervention
 
 ## Glossary
 
@@ -90,7 +94,8 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 - **Supervisor_Agent**: The routing agent that receives user queries and directs them to appropriate specialized agents
 - **Visit_Capture_Agent**: The agent that extracts structured information from natural language visit notes
 - **Dealer_Intelligence_Agent**: The agent that provides information about dealers, payments, orders, and health scores
-- **Manager_Dashboard**: Simple web interface (Streamlit) for sales managers to view team and dealer metrics
+- **Order_Planning_Agent**: The agent that handles order processing, inventory checks, and commitment fulfillment tracking
+- **Manager_Dashboard**: Web interface (React.js) for sales managers to view team and dealer metrics, forecast consumption, and alerts
 
 ### Business Entities
 
@@ -99,6 +104,7 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 - **Territory**: A geographic region containing multiple dealers assigned to a sales representative
 - **Commitment**: A promise made by a dealer regarding future orders (quantity, product, and timeline)
 - **Visit**: A record of a sales representative's interaction with a dealer
+- **Forecast_Consumption**: The process of matching actual orders against committed/forecasted demand
 
 ### Data Types
 
@@ -109,6 +115,8 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 - **Payment_Record**: Record of payment received against an invoice
 - **Visit_Record**: Details of a dealer visit including date, outcome, and notes
 - **Commitment_Record**: Extracted commitment from visit notes with product, quantity, and expected date
+- **Inventory_Record**: Current stock levels by product and location
+- **Data_Pipeline**: The system component responsible for loading and validating synthetic data
 
 ## Data Sources
 
@@ -125,6 +133,7 @@ For the hackathon, synthetic data will be generated to simulate a typical MSME d
 | Historical Orders | Past 6 months of orders | CSV/SQLite |
 | Historical Invoices | Invoice records with amounts | CSV/SQLite |
 | Historical Payments | Payment records | CSV/SQLite |
+| Inventory Levels | Current stock by product | CSV/SQLite |
 
 ### Unstructured Data (Real-time Capture)
 
@@ -174,7 +183,7 @@ For the hackathon, synthetic data will be generated to simulate a typical MSME d
 2. WHEN calculating visit priority, THE Dealer_Intelligence_Agent SHALL consider: payment overdue (collection urgency), days since last order (reorder potential), days since last visit (relationship maintenance), pending commitments about to expire, and dealer health score
 3. WHEN presenting the visit plan, THE SupplyChain_Copilot SHALL show dealer name, priority level (high/medium), key reasons for priority, and suggested action
 4. WHEN a user requests more details about a recommended dealer, THE SupplyChain_Copilot SHALL provide the full dealer briefing
-5. WHEN generating visit plans, THE Dealer_Intelligence_Agent SHALL limit recommendations to a manageable number (5-8 dealers for a day)
+5. WHEN generating visit plans, THE Dealer_Intelligence_Agent SHALL limit recommendations to a manageable number (4-5 dealers for a day)
 
 ### Requirement 4: Sales Dashboard for Representatives
 
@@ -182,23 +191,51 @@ For the hackathon, synthetic data will be generated to simulate a typical MSME d
 
 #### Acceptance Criteria
 
-1. WHEN a user requests dashboard (e.g., taps "Dashboard" or asks "Mera status kya hai?"), THE SupplyChain_Copilot SHALL display: sales vs target progress, total collections this month, visit coverage (dealers visited vs total), and pending follow-ups count
+1. WHEN a user requests dashboard (e.g., taps "Check Status" or asks "Mera situation/status kya hai?"), THE SupplyChain_Copilot SHALL display: sales vs target progress, commitments made and closed count, total collections this month, visit coverage (dealers visited vs total), and pending follow-ups count
 2. WHEN displaying progress metrics, THE SupplyChain_Copilot SHALL use visual indicators (progress bars using Unicode characters)
 3. WHEN there are urgent items requiring attention, THE SupplyChain_Copilot SHALL show alerts (high-value overdue payments, commitments expiring soon, dealers not visited in 30+ days)
 4. WHEN a user asks about specific metrics (e.g., "How much have I collected this month?"), THE Dealer_Intelligence_Agent SHALL provide detailed breakdown
 
-### Requirement 5: Manager Dashboard
+### Requirement 5: Manager Dashboard with Forecast Consumption
 
-**User Story:** As a sales manager, I want to see my team's performance and dealer pipeline on a simple dashboard, so that I can monitor operations without calling each rep.
+**User Story:** As a sales manager, I want to see my team's performance, dealer pipeline, and forecast consumption on a dashboard, so that I can monitor operations and plan inventory.
 
 #### Acceptance Criteria
 
-1. WHEN a manager accesses the dashboard, THE Manager_Dashboard SHALL display: commitment pipeline (all pending commitments with status), at-risk dealers list (declining orders, overdue payments), team performance summary, and collection status
-2. WHEN displaying commitment pipeline, THE Manager_Dashboard SHALL show dealer name, product, quantity, expected date, and status (new/due soon/overdue)
+1. WHEN a manager accesses the dashboard, THE Manager_Dashboard SHALL display: commitment pipeline (all pending commitments with status), at-risk dealers list (declining orders, overdue payments), team performance summary, collection status, and forecast consumption view
+2. WHEN displaying commitment pipeline, THE Manager_Dashboard SHALL show dealer name, product, quantity, expected date, and status (new/due soon/overdue/consumed)
 3. WHEN displaying at-risk dealers, THE Manager_Dashboard SHALL show dealer name, risk indicators, and assigned sales rep
 4. WHEN a manager needs to drill down, THE Manager_Dashboard SHALL allow filtering by sales rep, territory, or time period
+5. WHEN displaying forecast consumption, THE Manager_Dashboard SHALL show committed quantities vs actual orders received, with backward and forward consumption windows
+6. WHEN commitment conversion rate drops below threshold, THE Manager_Dashboard SHALL highlight this for attention
+7. The dashboard should have an Interactive map using which user can drill down. the map will have dealers and warehouse placed with their own separate icons. status level of different dealers will be shown on the map with appropriate colours: green, amber or red.
 
-### Requirement 6: Natural Language Query Processing
+### Requirement 6: Manager Alerts and Approvals
+
+**User Story:** As a sales manager, I want to receive alerts for critical situations and be able to approve discount requests, so that I can intervene when necessary.
+
+#### Acceptance Criteria
+
+1. WHEN a dealer becomes at-risk (health score drops below 50), THE SupplyChain_Copilot SHALL generate an alert for the assigned manager
+2. WHEN a sales rep's performance metrics fall below threshold, THE SupplyChain_Copilot SHALL generate an alert for the manager
+3. WHEN a discount request exceeds sales rep's authority level, THE Order_Planning_Agent SHALL route approval request to the manager
+4. WHEN a manager receives an approval request, manager will approve/reject the request through the telegram bot.
+5. WHEN manager takes action on an alert, THE SupplyChain_Copilot SHALL log the action and notify relevant parties.
+
+### Requirement 7: Order Planning and Commitment Fulfillment
+
+**User Story:** As a system user, I want the system to track commitment fulfillment and help with order planning, so that I can see which commitments converted to actual orders.
+
+#### Acceptance Criteria
+
+1. WHEN an order is placed by a dealer, THE Order_Planning_Agent SHALL attempt to match it against pending commitments (forecast consumption)
+2. WHEN matching orders to commitments, THE Order_Planning_Agent SHALL use backward consumption (match against past commitments first) and forward consumption (match against future commitments if past exhausted) logic
+3. WHEN a commitment is partially fulfilled by an order, THE Order_Planning_Agent SHALL update commitment status to show remaining quantity
+4. WHEN checking inventory for an order, THE Order_Planning_Agent SHALL verify available-to-promise (ATP) quantity
+5. WHEN inventory is insufficient for full order, THE Order_Planning_Agent SHALL suggest order splitting or alternative fulfillment options
+6. WHEN commitment due date passes without order, THE Order_Planning_Agent SHALL mark commitment as missed and update dealer reliability score
+
+### Requirement 8: Natural Language Query Processing
 
 **User Story:** As a system user, I want to ask questions in natural language (Hindi, English, or Hinglish), so that I can get information without learning commands.
 
@@ -210,20 +247,20 @@ For the hackathon, synthetic data will be generated to simulate a typical MSME d
 4. WHEN a query cannot be processed, THE SupplyChain_Copilot SHALL provide helpful suggestions (e.g., "I can help you with dealer info, visit logging, or planning. What would you like?")
 5. WHEN processing queries, THE SupplyChain_Copilot SHALL handle common variations and Hinglish phrases (e.g., "payment status" = "payment kya hai" = "kitna baaki hai")
 
-### Requirement 7: Telegram Bot Interface
+### Requirement 9: Telegram Bot Interface
 
 **User Story:** As a sales representative, I want to interact with the system through Telegram, so that I can use a familiar interface on my existing phone.
 
 #### Acceptance Criteria
 
-1. WHEN a user starts the bot, THE Telegram_Bot SHALL display a main menu with primary actions: Log Visit, Plan Day, Dashboard, and Help
-2. WHEN a user taps a menu button, THE Telegram_Bot SHALL initiate the corresponding flow
+1. WHEN a user starts the bot, THE Telegram_Bot SHALL display a welcome message with example messages for different situations and button for Check Status.
+2. WHEN a user types a question, THE Telegram_Bot SHALL route to the supervisor agent through API.
 3. WHEN presenting information, THE Telegram_Bot SHALL use Telegram-compatible formatting (bold, italic, emojis, inline keyboards)
 4. WHEN confirmation is needed, THE Telegram_Bot SHALL present inline buttons (e.g., [✓ Save] [✏️ Edit] [❌ Cancel])
 5. WHEN the user sends free text instead of tapping buttons, THE Telegram_Bot SHALL process it as a natural language query
 6. WHEN the system is processing, THE Telegram_Bot SHALL show appropriate feedback (typing indicator or progress message)
 
-### Requirement 8: Data Validation and Error Handling
+### Requirement 10: Data Validation and Error Handling
 
 **User Story:** As a system administrator, I want the system to validate data and handle errors gracefully, so that data integrity is maintained.
 
@@ -248,12 +285,55 @@ For the hackathon demonstration, the system will use synthetic data at the follo
 | Historical Orders | 500-800 | 6 months of order history |
 | Historical Visits | 300-500 | Visit records with notes |
 | Commitments | 50-100 | Mix of fulfilled, pending, and missed |
+| Inventory Records | 20-30 | Current stock by product |
 
-## Out of Scope for Hackathon
+## Scope Definition
 
-The following features are identified for future development and are not part of the current hackathon build:
+### MVP Scope (Hackathon Build)
 
-### Future Enhancements (Post-Hackathon)
+The following features are included in the MVP build:
+
+**Core Features:**
+- Natural language visit capture via Telegram
+- Dealer briefing and intelligence
+- Smart visit planning
+- Sales rep dashboard (Telegram)
+- Manager dashboard (React.js web app)
+- Commitment tracking with forecast consumption
+- Manager alerts for at-risk situations
+- Order-commitment matching (basic ATP)
+
+**Agents:**
+- Supervisor Agent (intent classification and routing)
+- Visit Capture Agent (NL extraction and entity resolution)
+- Dealer Intelligence Agent (profiles, payments, health scores, visit planning)
+- Order Planning Agent (commitment fulfillment, basic inventory check)
+
+### Full Vision (Idea Submission)
+
+The following features are included in the full vision for judges but may not be fully implemented:
+
+**Advanced Order Planning:**
+- Full ATP (Available-to-Promise) and CTP (Capable-to-Promise) capabilities
+- Order splitting when capacity is constrained
+- Backorder management
+- Delivery scheduling optimization
+
+**Logistics Optimization (Drop Sales):**
+- Identify delivery vans with spare capacity
+- Suggest nearby dealers who might need stock
+- Route optimization for drop sales
+- Real-time van tracking integration
+
+**Advanced Manager Features:**
+- Discount approval workflow with configurable thresholds
+- Sales rep performance coaching recommendations
+- Territory rebalancing suggestions
+- Predictive alerts using ML
+
+### Out of Scope for Hackathon
+
+**Future Enhancements (Post-Hackathon):**
 - WhatsApp Business API integration (currently using Telegram for ease of development)
 - Voice input and transcription for visit notes
 - Regional language support (Hindi, Tamil, etc.) beyond basic Hinglish
@@ -265,7 +345,7 @@ The following features are identified for future development and are not part of
 - Photo capture (shelf images, competitor products)
 - GPS tracking of visits
 
-### Enterprise Features (Not Target Market)
+**Enterprise Features (Not Target Market):**
 - Integration with external ERP/CRM systems via live APIs
 - GST compliance and invoice validation
 - Multi-company/multi-tenant architecture
@@ -273,7 +353,7 @@ The following features are identified for future development and are not part of
 - Audit trails and compliance reporting
 - Custom report generation with PDF export
 
-### Dealer-Side Features (Future Extension)
+**Dealer-Side Features (Future Extension):**
 - Dealer self-service portal
 - Inventory tracking for dealers
 - Automated reorder recommendations
