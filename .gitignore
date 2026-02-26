@@ -1,0 +1,108 @@
+# =============================================================
+# SupplyChain Copilot — .gitignore
+# =============================================================
+
+# ----------------------------
+# Secrets & Environment
+# ----------------------------
+.env
+.env.*
+!.env.example
+
+# ----------------------------
+# Python
+# ----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+.Python
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# ----------------------------
+# AWS / Infra
+# ----------------------------
+# Terraform state
+*.tfstate
+*.tfstate.backup
+.terraform/
+terraform.tfvars
+
+# CDK output
+cdk.out/
+
+# Lambda deployment packages
+*.zip
+
+# Infra runtime state
+infra/state.json
+
+# ----------------------------
+# Database & Generated Data
+# ----------------------------
+data/supplychain.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ----------------------------
+# Node / Frontend
+# ----------------------------
+node_modules/
+
+# ----------------------------
+# One-off data & migration scripts
+# (not needed for running the project)
+# ----------------------------
+scripts/shift_dates.py
+scripts/find_and_shift_dates.py
+scripts/update_sessions_schema.py
+scripts/migrate_sqlite_to_pg.py
+
+# ----------------------------
+# Debug / test scripts with hardcoded credentials
+# ----------------------------
+scripts/check_kpis.py
+scripts/verify_deployment.py
+
+# ----------------------------
+# Temporary / scratch files
+# (root-level debug/test payloads)
+# ----------------------------
+body.json
+output.json
+payload.json
+rg-query.json
+
+# ----------------------------
+# IDEs & Editors
+# ----------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ----------------------------
+# AI / Agent tooling
+# ----------------------------
+.claude/
+Agent.md

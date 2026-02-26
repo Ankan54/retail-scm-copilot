@@ -1,0 +1,63 @@
+/* ── SupplyChain Copilot — Design System ────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* Sidebar */
+  --sidebar: #1a1f37;
+  --sidebar-hov: #252a42;
+  --sidebar-act: #2f3556;
+  --sidebar-txt: #8b8fad;
+
+  /* Backgrounds */
+  --bg: #f0f1f6;
+  --card-bg: #ffffff;
+  --card-border: #e8e9f0;
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03);
+
+  /* Text */
+  --heading: #1a1f37;
+  --text: #3d4260;
+  --text-muted: #8b8fad;
+  --text-light: #a9adc4;
+
+  /* Accent Colors */
+  --primary: #6366f1;
+  --primary-soft: #ededfe;
+  --teal: #0ea5e9;
+  --teal-soft: #e6f6fe;
+  --pink: #ec4899;
+  --pink-soft: #fdf0f7;
+  --green: #22c55e;
+  --green-soft: #edfcf2;
+  --orange: #f59e0b;
+  --orange-soft: #fef8e7;
+  --red: #ef4444;
+  --red-soft: #fef2f2;
+  --purple: #7c3aed;
+  --purple-soft: #f3f0ff;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
+
+body {
+  font-family: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d0d1dd; border-radius: 3px; }
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes dotBounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+.mono { font-family: 'JetBrains Mono', monospace; }
