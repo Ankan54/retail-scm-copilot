@@ -162,6 +162,59 @@ def save_session(telegram_chat_id: str, sales_person_id: str,
 
 # ─── Bedrock Agent response formatter ─────────────────────────────────────────
 
+def get_web_session(session_id: str) -> Optional[dict]:
+    """Retrieve a web chat session by session_id (source='web')."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT session_id, agent_session_id, messages, title, last_message
+            FROM sessions
+            WHERE session_id = %s
+              AND source = 'web'
+              AND expires_at > NOW()
+            """,
+            (session_id,),
+        )
+        row = cur.fetchone()
+        return row_to_dict(row)
+    finally:
+        conn.close()
+
+
+def save_web_session(session_id: str, agent_session_id: str,
+                     messages: list, title: str = "New Conversation",
+                     last_message: str = "") -> str:
+    """Upsert a web chat session. Returns session_id."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        msgs_json = json.dumps(messages, default=_serialize)
+        cur.execute(
+            """
+            INSERT INTO sessions
+                (session_id, telegram_chat_id, sales_person_id, agent_session_id,
+                 context, last_message, messages, title, source,
+                 created_at, updated_at, expires_at)
+            VALUES (%s, NULL, NULL, %s, '{}', %s, %s::jsonb, %s, 'web',
+                    NOW(), NOW(), NOW() + INTERVAL '7 days')
+            ON CONFLICT (session_id) DO UPDATE SET
+                agent_session_id = EXCLUDED.agent_session_id,
+                last_message = EXCLUDED.last_message,
+                messages = EXCLUDED.messages,
+                title = EXCLUDED.title,
+                updated_at = NOW(),
+                expires_at = NOW() + INTERVAL '7 days'
+            """,
+            (session_id, agent_session_id, last_message, msgs_json, title),
+        )
+        conn.commit()
+        return session_id
+    finally:
+        conn.close()
+
+
 def bedrock_response(action_group: str, function: str, result: dict) -> dict:
     """Format a response for the Bedrock Agent action group protocol."""
     return {

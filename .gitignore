@@ -65,7 +65,7 @@ data/supplychain.db
 # Node / Frontend
 # ----------------------------
 node_modules/
-
+research/
 # ----------------------------
 # One-off data & migration scripts
 # (not needed for running the project)
@@ -106,3 +106,10 @@ Thumbs.db
 # ----------------------------
 .claude/
 Agent.md
+
+# ----------------------------
+# Temporary test / debug output
+# ----------------------------
+response.txt
+test_bedrock_streaming.py
+test_lambda_streaming.py

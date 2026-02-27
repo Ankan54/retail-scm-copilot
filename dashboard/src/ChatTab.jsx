@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Bot, User, Sparkles, ChevronRight, Plus, MessageSquare, Clock } from "lucide-react";
-import { T } from "./api";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { T, sendChatMessage, sendChatMessageStream, getStreamingUrl } from "./api";
 import { CHAT_SUGGESTIONS } from "./data";
 
 // Each "conversation" = { id, title, preview, time, messages[] }
@@ -37,48 +39,107 @@ export default function ChatTab() {
         setInput("");
     };
 
-    const sendChat = useCallback(() => {
-        if (!input.trim()) return;
+    const [typingStatus, setTypingStatus] = useState("");
+
+    const sendChat = useCallback(async () => {
+        if (!input.trim() || typing) return;
         const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         const userMsg = { role: "user", text: input, time: now };
         const firstMsg = active.messages.length === 1; // only welcome message
+        const msgText = input;
+        const convId = activeId;
 
-        setConversations(prev => prev.map(c => c.id !== activeId ? c : {
+        setConversations(prev => prev.map(c => c.id !== convId ? c : {
             ...c,
-            title: firstMsg ? input.slice(0, 36) + (input.length > 36 ? "…" : "") : c.title,
-            preview: input.slice(0, 45) + (input.length > 45 ? "…" : ""),
+            title: firstMsg ? msgText.slice(0, 36) + (msgText.length > 36 ? "…" : "") : c.title,
+            preview: msgText.slice(0, 45) + (msgText.length > 45 ? "…" : ""),
             time: now,
             messages: [...c.messages, userMsg],
         }));
         setInput("");
         setTyping(true);
+        setTypingStatus("Thinking...");
 
-        // TODO: Replace with real Bedrock supervisor agent call via /api/chat
-        const q = input.toLowerCase();
-        setTimeout(() => {
-            let r = { agent: "Supervisor", text: "I can help you with:\n\n• Dealer Briefing — \"Brief me for [dealer name]\"\n• Visit Planning — \"Plan my visits this week\"\n• Commitment Tracking — \"Show commitment pipeline\"\n• Demand Forecast — \"Forecast for [product]\"\n• Collections — \"Kitna collection hua?\"\n• Risk Alerts — \"Show at-risk dealers\"" };
+        const sessionId = String(convId);
 
-            if (q.includes("sharma") || q.includes("brief")) {
-                r = { agent: "Dealer Intelligence Agent", text: "📋 Dealer Brief: Sharma General Store\n\n🏢 Platinum (A) Dealer — Central Delhi\n📊 Monthly Revenue: ₹8.92L (↑12% vs last quarter)\n💰 Outstanding: ₹45,000 (within credit limit)\n📅 Last Visit: 2 days ago by Ankan Bera\n\nActive Commitments (3):\n• 500 cases Premium Soap — due next Tuesday\n• 200 cases Industrial Cleaner — due Mar 10\n• Trial order: New range samples requested\n\nSuggested Talking Points:\n1. Follow up on Premium Soap delivery\n2. Discuss new product range\n3. Competitor pricing — consider loyalty discount" };
-            } else if (q.includes("plan") && q.includes("visit")) {
-                r = { agent: "Sales Analytics Agent", text: "📅 Visit Plan — This Week\n\nPriority 1 — URGENT 🔴\n• Gupta Traders (East Delhi) — ₹3.2L overdue, 25 days gap\n• Mehta Supplies (North Delhi) — ₹1.89L overdue, 45 days\n\nPriority 2 — Follow-up 🟡\n• Joshi Retail Hub — Payment follow-up\n• Nair Distributors — Declining orders\n\nPriority 3 — Growth 🟢\n• Sharma General Store — Confirm 500 case commitment\n• Reddy & Sons — Upsell new range" };
-            } else if (q.includes("risk") || q.includes("at-risk")) {
-                r = { agent: "Dealer Intelligence Agent", text: "⚠️ At-Risk Dealers (4)\n\n🔴 Critical:\n• Mehta Supplies — ₹1.89L overdue, 45 days no visit\n\n🟡 At-Risk:\n• Gupta Traders — ₹3.2L overdue, declining frequency\n• Joshi Retail Hub — ₹1.56L overdue\n• Nair Distributors — ₹2.1L overdue" };
-            } else if (q.includes("forecast") || q.includes("demand")) {
-                r = { agent: "Order Planning Agent", text: "📈 Demand Forecast — Premium Soap\n\nNext 4 Weeks:\n• W1: 1,200 cases (850 committed + 350 forecast)\n• W2: 980 cases (620 committed + 360 forecast)\n• W3: 1,100 cases (400 committed + 700 forecast)\n• W4: 950 cases (200 committed + 750 forecast)\n\nConfidence: 78% | 15% higher than same period last year" };
-            } else if (q.includes("collection") || q.includes("kitna") || q.includes("mahine")) {
-                r = { agent: "Dealer Intelligence Agent", text: "💰 Collections — March 2026\n\nTotal: ₹17.0L / ₹30.0L target (56.7%)\n\nTop Collected:\n• Reddy & Sons: ₹4.8L ✅\n• Das Trading: ₹4.2L ✅\n• Sharma General Store: ₹3.9L ✅\n\nPending:\n• Gupta Traders: ₹3.2L (25 days overdue)\n• Nair Distributors: ₹2.1L\n• Mehta Supplies: ₹1.89L (45 days!)" };
-            } else if (q.includes("log") || q.includes("visit")) {
-                r = { agent: "Visit Capture Agent", text: "Sure! To log a visit, please tell me:\n1. Which dealer did you visit?\n2. What commitments were made?\n3. Any payment collected?\n\nExample: \"Visited Sharma General Store, they committed 500 cases of Premium Soap by Tuesday, collected ₹45K\"" };
-            } else if (q.includes("commitment") || q.includes("pipeline")) {
-                r = { agent: "Visit Capture Agent", text: "📋 Commitment Pipeline\n\nTotal: 500 commitments\n\n✅ Converted: 275 (₹18.2L) — 55%\n🟡 Pending: 90 (₹7.8L) — 18%\n🔵 Partial: 60 (₹5.4L) — 12%\n🔴 Expired: 60 (₹3.4L) — 12%\n⛔ Cancelled: 15 (₹1.2L) — 3%\n\nConversion Rate: 67%" };
+        try {
+            if (getStreamingUrl()) {
+                // Streaming mode: progressive text + trace steps
+                let accumulated = "";
+                let detectedAgent = "Supervisor";
+
+                await sendChatMessageStream(msgText, sessionId, {
+                    onChunk: (text) => {
+                        accumulated += text;
+                        setConversations(prev => prev.map(c => {
+                            if (c.id !== convId) return c;
+                            const msgs = [...c.messages];
+                            const last = msgs[msgs.length - 1];
+                            if (last && last.role === "assistant" && last._streaming) {
+                                msgs[msgs.length - 1] = { ...last, text: accumulated };
+                            } else {
+                                msgs.push({
+                                    role: "assistant", text: accumulated, agent: detectedAgent,
+                                    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                                    _streaming: true,
+                                });
+                            }
+                            return { ...c, messages: msgs };
+                        }));
+                    },
+                    onTrace: (step, agent) => {
+                        if (agent) detectedAgent = agent;
+                        setTypingStatus(step);
+                    },
+                    onDone: (agent) => {
+                        if (agent) detectedAgent = agent;
+                        // Finalize: remove _streaming flag, set correct agent
+                        setConversations(prev => prev.map(c => {
+                            if (c.id !== convId) return c;
+                            const msgs = [...c.messages];
+                            const last = msgs[msgs.length - 1];
+                            if (last && last._streaming) {
+                                const { _streaming, ...rest } = last;
+                                msgs[msgs.length - 1] = { ...rest, agent: detectedAgent };
+                            }
+                            return { ...c, messages: msgs };
+                        }));
+                        setTyping(false);
+                        setTypingStatus("");
+                    },
+                    onError: (errMsg) => {
+                        const agentMsg = {
+                            role: "assistant", text: errMsg || "Something went wrong. Please try again.",
+                            agent: "System", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                        };
+                        setConversations(prev => prev.map(c => c.id !== convId ? c : { ...c, messages: [...c.messages, agentMsg] }));
+                        setTyping(false);
+                        setTypingStatus("");
+                    },
+                });
+            } else {
+                // Non-streaming fallback via /api/chat
+                const result = await sendChatMessage(msgText, sessionId);
+                const agentMsg = {
+                    role: "assistant",
+                    text: result.text || "No response received.",
+                    agent: result.agent || "Supervisor",
+                    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                };
+                setConversations(prev => prev.map(c => c.id !== convId ? c : { ...c, messages: [...c.messages, agentMsg] }));
+                setTyping(false);
+                setTypingStatus("");
             }
-
-            const agentMsg = { role: "assistant", ...r, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) };
-            setConversations(prev => prev.map(c => c.id !== activeId ? c : { ...c, messages: [...c.messages, agentMsg] }));
+        } catch (err) {
+            const agentMsg = {
+                role: "assistant", text: `Something went wrong: ${err.message}. Please try again.`,
+                agent: "System", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            };
+            setConversations(prev => prev.map(c => c.id !== convId ? c : { ...c, messages: [...c.messages, agentMsg] }));
             setTyping(false);
-        }, 1400);
-    }, [input, activeId, active]);
+            setTypingStatus("");
+        }
+    }, [input, activeId, active, typing]);
 
     const msgs = active?.messages || [];
 
@@ -153,14 +214,19 @@ export default function ChatTab() {
                                         </div>
                                     )}
                                     <div style={{
-                                        padding: "12px 16px", borderRadius: 14, fontSize: 13, lineHeight: 1.65, whiteSpace: "pre-wrap",
+                                        padding: "12px 16px", borderRadius: 14, fontSize: 13, lineHeight: 1.65,
                                         background: m.role === "user" ? "linear-gradient(135deg,#6366f1,#818cf8)" : "#fff",
                                         border: m.role === "user" ? "none" : "1px solid " + T.cardBorder,
                                         color: m.role === "user" ? "#fff" : T.text,
                                         boxShadow: m.role === "assistant" ? T.cardShadow : "0 2px 8px rgba(99,102,241,0.18)",
                                         borderTopRightRadius: m.role === "user" ? 4 : 14,
                                         borderTopLeftRadius: m.role === "assistant" ? 4 : 14,
-                                    }}>{m.text}</div>
+                                        whiteSpace: m.role === "user" ? "pre-wrap" : undefined,
+                                    }}>
+                                        {m.role === "assistant"
+                                            ? <div className="chat-md"><Markdown remarkPlugins={[remarkGfm]}>{m.text}</Markdown></div>
+                                            : m.text}
+                                    </div>
                                     <div style={{ fontSize: 10, color: T.textLight, marginTop: 4, textAlign: m.role === "user" ? "right" : "left" }}>{m.time}</div>
                                 </div>
                                 {m.role === "user" && (
@@ -175,8 +241,11 @@ export default function ChatTab() {
                                 <div style={{ width: 34, height: 34, borderRadius: 10, background: "linear-gradient(135deg,#6366f1,#ec4899)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                     <Bot size={16} color="#fff" />
                                 </div>
-                                <div style={{ padding: "14px 18px", borderRadius: 14, borderTopLeftRadius: 4, background: "#fff", border: "1px solid " + T.cardBorder, display: "flex", gap: 5, boxShadow: T.cardShadow }}>
-                                    {[0, 1, 2].map(j => <div key={j} style={{ width: 7, height: 7, borderRadius: "50%", background: T.primary, animation: "dotBounce 1.2s ease " + j * .2 + "s infinite" }} />)}
+                                <div style={{ padding: "14px 18px", borderRadius: 14, borderTopLeftRadius: 4, background: "#fff", border: "1px solid " + T.cardBorder, display: "flex", alignItems: "center", gap: 8, boxShadow: T.cardShadow }}>
+                                    <div style={{ display: "flex", gap: 5 }}>
+                                        {[0, 1, 2].map(j => <div key={j} style={{ width: 7, height: 7, borderRadius: "50%", background: T.primary, animation: "dotBounce 1.2s ease " + j * .2 + "s infinite" }} />)}
+                                    </div>
+                                    {typingStatus && <span style={{ fontSize: 11, color: T.textMuted, marginLeft: 4 }}>{typingStatus}</span>}
                                 </div>
                             </div>
                         )}

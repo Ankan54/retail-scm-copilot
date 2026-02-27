@@ -66,17 +66,69 @@ export const fetchSalesTeam        = (month) => apiFetch('/api/sales-team',     
 export const fetchRecentActivity   = (month) => apiFetch('/api/recent-activity',   month ? { month } : {});
 export const fetchWeeklyPipeline   = (month) => apiFetch('/api/weekly-pipeline',   month ? { month } : {});
 
+// Production Dashboard
+export const fetchProductionMetrics      = (month) => apiFetch('/api/production-metrics',       month ? { month } : {});
+export const fetchProductionDaily        = (month) => apiFetch('/api/production-daily',         month ? { month } : {});
+export const fetchProductionDemandSupply = ()       => apiFetch('/api/production-demand-supply');
+export const fetchProductionInventory    = ()       => apiFetch('/api/production-inventory');
+export const fetchForecast               = (weeks)  => apiFetch('/api/forecast', { product: 'all', weeks: weeks || 20 });
+
 export async function sendChatMessage(message, sessionId) {
     // Chat goes directly to the Bedrock supervisor agent via /api/chat
     try {
         const res = await fetch(`${API_BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, session_id: sessionId }),
+            body: JSON.stringify({ message, session_id: sessionId, source: 'dashboard' }),
         });
+        if (res.status === 504) {
+            return {
+                text: "The query took too long to process. This can happen with complex multi-agent queries. Please try a simpler question or try again.",
+                agent: "System",
+            };
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.json();
     } catch (err) {
-        return { text: `Error: ${err.message}`, agent: "System" };
+        return { text: `Connection error: ${err.message}. Please try again.`, agent: "System" };
+    }
+}
+
+// Streaming chat via Lambda Function URL (SSE)
+// Lambda Function URL for streaming (SSE) — bypasses API Gateway 29s timeout
+let STREAMING_URL = 'https://gcquxmfbpd7lbty3m4jp7cki6m0xaubd.lambda-url.us-east-1.on.aws/';
+
+export function setStreamingUrl(url) { STREAMING_URL = url; }
+export function getStreamingUrl() { return STREAMING_URL; }
+
+export async function sendChatMessageStream(message, sessionId, { onChunk, onTrace, onDone, onError }) {
+    const url = STREAMING_URL || `${API_BASE}/api/chat`;
+
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message, session_id: sessionId, source: 'dashboard' }),
+        });
+
+        if (res.status === 504) {
+            onError?.("The query took too long. Please try a simpler question or try again.");
+            return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+
+        // Animate traces first (200ms between each), then show response
+        const traces = data.traces || [];
+        for (const t of traces) {
+            onTrace?.(t.step, t.agent, t.tool);
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        onChunk?.(data.text || "");
+        onDone?.(data.agent || "Supervisor", data.session_id || sessionId);
+    } catch (err) {
+        onError?.(err.message);
     }
 }

@@ -40,8 +40,10 @@ from infra.config import (
     AGENTS,
     SUPERVISOR_INSTRUCTIONS, VISIT_CAPTURE_INSTRUCTIONS,
     DEALER_INTELLIGENCE_INSTRUCTIONS, ORDER_PLANNING_INSTRUCTIONS,
+    MANAGER_ANALYTICS_INSTRUCTIONS,
     DEALER_ACTION_FUNCTIONS, VISIT_ACTION_FUNCTIONS,
-    ORDER_ACTION_FUNCTIONS, ANALYTICS_ACTION_FUNCTIONS,
+    ORDER_ACTION_FUNCTIONS, FORECAST_ACTION_FUNCTIONS,
+    ANALYTICS_ACTION_FUNCTIONS,
     API_GATEWAY_NAME, API_STAGE, RESOURCE_TAGS,
 )
 
@@ -131,8 +133,11 @@ def package_lambda(lambda_key: str, cfg: dict) -> Path:
     build_dir = Path(tempfile.mkdtemp()) / f"build_{lambda_key}"
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy handler
+    # Copy handler + any data files (e.g. .pkl model files)
     shutil.copy(source_dir / "handler.py", build_dir / "handler.py")
+    for f in source_dir.glob("*"):
+        if f.is_file() and f.name != "handler.py" and not f.name.startswith("."):
+            shutil.copy(f, build_dir / f.name)
 
     # Copy shared utilities as 'shared' package
     shared_build = build_dir / "shared"
@@ -380,22 +385,45 @@ def create_action_group(bedrock, agent_id: str, ag_name: str, lambda_arn: str,
 
     function_schema = _build_function_schema(functions)
 
+    # Find existing action group by name so we can upsert
+    existing_id = None
     try:
-        response = bedrock.create_agent_action_group(
-            agentId=agent_id,
-            agentVersion="DRAFT",
-            actionGroupName=ag_name,
-            description=f"Action group for {ag_name}",
-            actionGroupExecutor={"lambda": lambda_arn},
-            functionSchema=function_schema,
-        )
-        ag_id = response["agentActionGroup"]["actionGroupId"]
-        logger.info(f"      ✅ {ag_id}")
-        return ag_id
+        groups = bedrock.list_agent_action_groups(
+            agentId=agent_id, agentVersion="DRAFT"
+        ).get("actionGroupSummaries", [])
+        for g in groups:
+            if g["actionGroupName"] == ag_name:
+                existing_id = g["actionGroupId"]
+                break
+    except ClientError:
+        pass
+
+    try:
+        if existing_id:
+            bedrock.update_agent_action_group(
+                agentId=agent_id,
+                agentVersion="DRAFT",
+                actionGroupId=existing_id,
+                actionGroupName=ag_name,
+                description=f"Action group for {ag_name}",
+                actionGroupExecutor={"lambda": lambda_arn},
+                functionSchema=function_schema,
+            )
+            logger.info(f"      ✅ Updated: {existing_id}")
+            return existing_id
+        else:
+            response = bedrock.create_agent_action_group(
+                agentId=agent_id,
+                agentVersion="DRAFT",
+                actionGroupName=ag_name,
+                description=f"Action group for {ag_name}",
+                actionGroupExecutor={"lambda": lambda_arn},
+                functionSchema=function_schema,
+            )
+            ag_id = response["agentActionGroup"]["actionGroupId"]
+            logger.info(f"      ✅ Created: {ag_id}")
+            return ag_id
     except ClientError as e:
-        if "already exists" in str(e).lower() or "ConflictException" in str(e):
-            logger.info(f"      ℹ️  Already exists")
-            return "exists"
         logger.error(f"      ❌ {e}")
         raise
 
@@ -411,12 +439,34 @@ def prepare_agent(bedrock, agent_id: str, dry_run=False):
     logger.info(f"    Prepared, status: {status}")
 
 
-def create_agent_alias(bedrock, agent_id: str, alias_name: str, dry_run=False) -> str:
-    """Create an agent alias pointing to DRAFT version."""
+def create_agent_alias(bedrock, agent_id: str, alias_name: str,
+                       dry_run=False, refresh=False) -> str:
+    """
+    Create or return an existing agent alias.
+    refresh=True: delete old alias first so recreate auto-snapshots latest DRAFT.
+                  Only safe for the Supervisor (collaborators can't be deleted while
+                  still associated with a supervisor).
+    """
     if dry_run:
         return f"mock-alias-{alias_name}"
 
     logger.info(f"    Creating alias '{alias_name}'...")
+
+    # Optionally refresh: delete then recreate to snapshot latest DRAFT
+    if refresh:
+        try:
+            aliases = bedrock.list_agent_aliases(agentId=agent_id)["agentAliasSummaries"]
+            for a in aliases:
+                if a["agentAliasName"] == alias_name:
+                    old_id = a["agentAliasId"]
+                    logger.info(f"    🔄 Refreshing alias {old_id} → deleting to recreate with latest version...")
+                    bedrock.delete_agent_alias(agentId=agent_id, agentAliasId=old_id)
+                    time.sleep(3)
+                    break
+        except ClientError as e:
+            logger.warning(f"    ⚠️  Could not delete old alias (skipping refresh): {e}")
+            refresh = False  # fall through to create-or-return-existing
+
     try:
         response = bedrock.create_agent_alias(
             agentId=agent_id,
@@ -429,8 +479,7 @@ def create_agent_alias(bedrock, agent_id: str, alias_name: str, dry_run=False) -
         time.sleep(5)
         return alias_id
     except ClientError as e:
-        if "already exists" in str(e).lower():
-            # Get existing alias
+        if "already exists" in str(e).lower() or "ConflictException" in str(e):
             aliases = bedrock.list_agent_aliases(agentId=agent_id)["agentAliasSummaries"]
             for a in aliases:
                 if a["agentAliasName"] == alias_name:
@@ -451,31 +500,32 @@ def deploy_agents(clients, state, dry_run=False):
 
     lambdas = state.get("lambdas", {})
 
-    # Map: agent_key → (instructions, action_group_name, lambda_key, functions)
+    # Map: agent_key → (instructions, [(ag_name, lambda_key, functions), ...])
     agent_configs = {
         "dealer_intelligence": (
             DEALER_INTELLIGENCE_INSTRUCTIONS,
-            "DealerActionGroup",
-            "dealer_actions",
-            DEALER_ACTION_FUNCTIONS,
+            [("DealerActionGroup", "dealer_actions", DEALER_ACTION_FUNCTIONS)],
+        ),
+        "manager_analytics": (
+            MANAGER_ANALYTICS_INSTRUCTIONS,
+            [("AnalyticsActionGroup", "analytics_actions", ANALYTICS_ACTION_FUNCTIONS)],
         ),
         "visit_capture": (
             VISIT_CAPTURE_INSTRUCTIONS,
-            "VisitActionGroup",
-            "visit_actions",
-            VISIT_ACTION_FUNCTIONS,
+            [("VisitActionGroup", "visit_actions", VISIT_ACTION_FUNCTIONS)],
         ),
         "order_planning": (
             ORDER_PLANNING_INSTRUCTIONS,
-            "OrderActionGroup",
-            "order_actions",
-            ORDER_ACTION_FUNCTIONS,
+            [
+                ("OrderActionGroup", "order_actions", ORDER_ACTION_FUNCTIONS),
+                ("ForecastActionGroup", "forecast", FORECAST_ACTION_FUNCTIONS),
+            ],
         ),
     }
 
-    # Step 4a: Create the 3 collaborator agents first
+    # Step 4a: Create the 4 collaborator agents first
     logger.info("\n--- 4a: Creating Collaborator Agents ---")
-    for agent_key, (instructions, ag_name, lambda_key, functions) in agent_configs.items():
+    for agent_key, (instructions, action_groups) in agent_configs.items():
         cfg = AGENTS[agent_key]
         agent_info = create_bedrock_agent(bedrock, agent_key, cfg, instructions, state, dry_run)
         state["agents"][agent_key] = agent_info
@@ -484,15 +534,15 @@ def deploy_agents(clients, state, dry_run=False):
 
         if not dry_run and agent_info.get("agent_id"):
             agent_id = agent_info["agent_id"]
-            lambda_arn = lambdas.get(lambda_key, {}).get("arn", "")
-            if not lambda_arn and not dry_run:
-                logger.warning(f"    ⚠️  Lambda ARN not found for {lambda_key} — deploy lambdas first!")
-                continue
 
-            # Create action group
-            if lambda_arn:
+            # Create all action groups for this agent
+            for ag_name, lambda_key, functions in action_groups:
+                lambda_arn = lambdas.get(lambda_key, {}).get("arn", "")
+                if not lambda_arn:
+                    logger.warning(f"    ⚠️  Lambda ARN not found for {lambda_key} — deploy lambdas first!")
+                    continue
                 ag_id = create_action_group(bedrock, agent_id, ag_name, lambda_arn, functions, dry_run)
-                state["agents"][agent_key]["action_group_id"] = ag_id
+                state["agents"][agent_key][f"action_group_{ag_name}"] = ag_id
 
             # Prepare agent
             prepare_agent(bedrock, agent_id, dry_run)
@@ -531,14 +581,16 @@ def deploy_agents(clients, state, dry_run=False):
 
             collab_name = {
                 "dealer_intelligence": "Dealer_Intelligence_Agent",
-                "visit_capture": "Visit_Capture_Agent",
-                "order_planning": "Order_Planning_Agent",
+                "visit_capture":       "Visit_Capture_Agent",
+                "order_planning":      "Order_Planning_Agent",
+                "manager_analytics":   "Manager_Analytics_Agent",
             }[agent_key]
 
             collab_instruction = {
                 "dealer_intelligence": (
-                    "Route to Dealer_Intelligence_Agent for: dealer briefings, payment status, "
-                    "health scores, visit planning, rep dashboard metrics"
+                    "Route to Dealer_Intelligence_Agent for: individual dealer briefings, "
+                    "payment status of a specific dealer, health scores, visit planning for a rep, "
+                    "rep dashboard metrics (one rep's performance)"
                 ),
                 "visit_capture": (
                     "Route to Visit_Capture_Agent when user is logging a dealer visit, "
@@ -547,6 +599,11 @@ def deploy_agents(clients, state, dry_run=False):
                 "order_planning": (
                     "Route to Order_Planning_Agent for: order creation, inventory checks, "
                     "commitment fulfillment tracking, forecast consumption"
+                ),
+                "manager_analytics": (
+                    "Route to Manager_Analytics_Agent for manager-scope queries: team performance "
+                    "overview, all reps comparison, at-risk dealers across the entire network, "
+                    "company-wide commitment pipeline, total collections across all territories"
                 ),
             }[agent_key]
 
@@ -570,12 +627,25 @@ def deploy_agents(clients, state, dry_run=False):
         # Prepare supervisor
         prepare_agent(bedrock, sup_id, dry_run)
 
-        # Create supervisor alias
-        sup_alias_id = create_agent_alias(bedrock, sup_id, "prod", dry_run)
+        # Create supervisor alias — refresh=True snapshots latest DRAFT into a new version
+        sup_alias_id = create_agent_alias(bedrock, sup_id, "prod", dry_run, refresh=True)
         sup_alias_arn = f"arn:aws:bedrock:{REGION}:{ACCOUNT_ID}:agent-alias/{sup_id}/{sup_alias_id}"
         state["agents"]["supervisor"]["alias_id"] = sup_alias_id
         state["agents"]["supervisor"]["alias_arn"] = sup_alias_arn
         save_state(state)
+
+        # Patch Lambda env var in deployed function so it picks up the new alias ID
+        if not dry_run:
+            try:
+                lc = clients["lambda"]
+                fn_name = LAMBDA_FUNCTIONS["telegram_webhook"]["name"]
+                current_cfg = lc.get_function_configuration(FunctionName=fn_name)
+                env = current_cfg.get("Environment", {}).get("Variables", {})
+                env["BEDROCK_AGENT_ALIAS_ID"] = sup_alias_id
+                lc.update_function_configuration(FunctionName=fn_name, Environment={"Variables": env})
+                logger.info(f"    ✅ Lambda env BEDROCK_AGENT_ALIAS_ID → {sup_alias_id}")
+            except Exception as e:
+                logger.warning(f"    ⚠️  Could not update Lambda env: {e} — run --step lambdas manually")
 
         logger.info(f"\n  ✅ SUPERVISOR AGENT READY")
         logger.info(f"     Agent ID:  {sup_id}")
@@ -696,7 +766,7 @@ def create_api_gateway(clients, state, dry_run=False):
             pass  # Already set up
 
     # Grant API Gateway invoke permission for each Lambda used by the API
-    for fn_key in ["telegram_webhook", "dashboard_api", "analytics_actions"]:
+    for fn_key in ["telegram_webhook", "dashboard_api", "analytics_actions", "forecast"]:
         fn_name = lambdas.get(fn_key, {}).get("name", "")
         if fn_name:
             grant_apigw_invoke(fn_name)
@@ -718,6 +788,8 @@ def create_api_gateway(clients, state, dry_run=False):
     dashboard_routes = [
         "metrics", "dealers", "revenue-chart", "commitment-pipeline",
         "sales-team", "recent-activity", "weekly-pipeline",
+        "production-metrics", "production-daily",
+        "production-demand-supply", "production-inventory",
     ]
     for subpath in dashboard_routes:
         sub_id = ensure_resource(subpath, api_resource_id)
@@ -728,6 +800,11 @@ def create_api_gateway(clients, state, dry_run=False):
     chat_api_id = ensure_resource("chat", api_resource_id)
     add_method(chat_api_id, "POST", "telegram_webhook")
     logger.info("  ✅ /api/chat → telegram_webhook")
+
+    # Forecast endpoint → scm-forecast Lambda
+    forecast_id = ensure_resource("forecast", api_resource_id)
+    add_method(forecast_id, "GET", "forecast")
+    logger.info("  ✅ /api/forecast → forecast")
 
     # Analytics endpoints → scm-analytics-actions Lambda (Bedrock agent / direct testing)
     analytics_routes = ["commitments", "alerts", "map"]
@@ -754,6 +831,143 @@ def create_api_gateway(clients, state, dry_run=False):
         logger.info(f"     URL: {api_url}")
     except ClientError as e:
         logger.error(f"  ❌ Deployment failed: {e}")
+
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 6: Create Lambda Function URL for Streaming Chat
+# ─────────────────────────────────────────────────────────────────────────────
+
+def create_function_url(clients, state, dry_run=False):
+    """Create a Lambda Function URL for streaming chat responses (SSE)."""
+    logger.info("=" * 60)
+    logger.info("STEP 6: Creating Lambda Function URL for Streaming Chat")
+
+    if dry_run:
+        logger.info("  [DRY RUN] Would create Function URL")
+        return True
+
+    lc = clients["lambda"]
+    fn_name = "scm-telegram-webhook"
+
+    # Check if Function URL already exists
+    existing_url = state.get("function_url")
+    if existing_url:
+        logger.info(f"  ℹ️  Function URL already exists: {existing_url}")
+        return True
+
+    try:
+        resp = lc.create_function_url_config(
+            FunctionName=fn_name,
+            AuthType="NONE",
+            InvokeMode="RESPONSE_STREAM",
+            Cors={
+                "AllowOrigins": ["*"],
+                "AllowMethods": ["*"],
+                "AllowHeaders": ["*"],
+                "AllowCredentials": False,
+            },
+        )
+        func_url = resp["FunctionUrl"]
+        logger.info(f"  ✅ Function URL created: {func_url}")
+    except ClientError as e:
+        if "ResourceConflictException" in str(e):
+            # Already exists, get it
+            resp = lc.get_function_url_config(FunctionName=fn_name)
+            func_url = resp["FunctionUrl"]
+            # Update to ensure RESPONSE_STREAM mode
+            try:
+                lc.update_function_url_config(
+                    FunctionName=fn_name,
+                    AuthType="NONE",
+                    InvokeMode="RESPONSE_STREAM",
+                    Cors={
+                        "AllowOrigins": ["*"],
+                        "AllowMethods": ["*"],
+                        "AllowHeaders": ["*"],
+                        "AllowCredentials": False,
+                    },
+                )
+            except ClientError:
+                pass
+            logger.info(f"  ℹ️  Using existing Function URL: {func_url}")
+        else:
+            logger.error(f"  ❌ Failed: {e}")
+            return False
+
+    # Add public access permission for Function URL (AuthType=NONE needs this)
+    try:
+        lc.add_permission(
+            FunctionName=fn_name,
+            StatementId="AllowPublicFunctionUrl",
+            Action="lambda:InvokeFunctionUrl",
+            Principal="*",
+            FunctionUrlAuthType="NONE",
+        )
+        logger.info("  ✅ Public access permission granted")
+    except ClientError as e:
+        if "already exists" in str(e).lower():
+            logger.info("  ℹ️  Permission already exists")
+        else:
+            logger.warning(f"  ⚠️  Permission error: {e}")
+
+    state["function_url"] = func_url
+    save_state(state)
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 7: Enable Code Interpreter on Supervisor Agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+def enable_code_interpreter(clients, state, dry_run=False):
+    """Enable Code Interpreter action group on the Supervisor Agent."""
+    logger.info("=" * 60)
+    logger.info("STEP 7: Enabling Code Interpreter on Supervisor Agent")
+
+    if dry_run:
+        logger.info("  [DRY RUN] Would enable Code Interpreter")
+        return True
+
+    bedrock = clients["bedrock"]
+    sup_id = state.get("agents", {}).get("supervisor", {}).get("agent_id")
+    if not sup_id:
+        logger.warning("  ⚠️  Supervisor agent not found in state")
+        return False
+
+    try:
+        bedrock.create_agent_action_group(
+            agentId=sup_id,
+            agentVersion="DRAFT",
+            actionGroupName="CodeInterpreter",
+            parentActionGroupSignature="AMAZON.CodeInterpreter",
+            actionGroupState="ENABLED",
+        )
+        logger.info("  ✅ Code Interpreter enabled")
+    except ClientError as e:
+        if "already exists" in str(e).lower() or "ConflictException" in str(e):
+            logger.info("  ℹ️  Code Interpreter already enabled")
+        else:
+            logger.error(f"  ❌ {e}")
+            return False
+
+    # Re-prepare supervisor with Code Interpreter
+    prepare_agent(bedrock, sup_id, dry_run)
+
+    # Update alias
+    sup_alias_id = state.get("agents", {}).get("supervisor", {}).get("alias_id")
+    if sup_alias_id:
+        try:
+            bedrock.update_agent_alias(
+                agentId=sup_id,
+                agentAliasId=sup_alias_id,
+                agentAliasName="prod",
+                description="Updated with Code Interpreter",
+            )
+            logger.info("  ✅ Supervisor alias updated")
+        except ClientError as e:
+            logger.warning(f"  ⚠️  Alias update: {e}")
 
     return True
 
@@ -799,7 +1013,8 @@ def print_summary(state):
 
 def main():
     parser = argparse.ArgumentParser(description="SupplyChain Copilot Infrastructure Setup")
-    parser.add_argument("--step", choices=["upload_db", "log_groups", "lambdas", "agents", "api", "all"],
+    parser.add_argument("--step", choices=["upload_db", "log_groups", "lambdas", "agents", "api",
+                                          "function_url", "code_interpreter", "all"],
                         default="all", help="Which step to run")
     parser.add_argument("--dry-run", action="store_true", help="Print plan without executing")
     args = parser.parse_args()
@@ -824,6 +1039,12 @@ def main():
 
     if args.step in ("all", "api"):
         create_api_gateway(clients, state, args.dry_run)
+
+    if args.step in ("all", "function_url"):
+        create_function_url(clients, state, args.dry_run)
+
+    if args.step in ("all", "code_interpreter"):
+        enable_code_interpreter(clients, state, args.dry_run)
 
     if args.step == "all":
         print_summary(state)

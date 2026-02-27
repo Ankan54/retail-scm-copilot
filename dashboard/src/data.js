@@ -67,10 +67,12 @@ export const DEALER_BY_CAT = [
 ];
 
 export const CHAT_SUGGESTIONS = [
-    "Brief me for Sharma General Store visit",
-    "Plan my visits for this week",
-    "Show at-risk dealers in my region",
-    "What's the demand forecast for Premium Soap?",
-    "Kitna collection hua is mahine?",
-    "Show commitment pipeline for my territory",
+    "Which sales reps are below target this month?",
+    "Show all at-risk and critical dealers across the network",
+    "Total overdue collections across all territories",
+    "Demand forecast for all products — next 8 weeks",
+    "Commitment conversion rate this month — team overview",
+    "Current inventory levels and any reorder alerts",
+    "Compare team performance: visits, orders, collections",
+    "Production vs demand gap for this quarter",
 ];

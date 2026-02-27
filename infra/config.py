@@ -8,7 +8,7 @@ ACCOUNT_ID = "667736132441"
 REGION = "us-east-1"
 
 # ─── Model ID (confirmed working cross-region inference profile) ─────────────
-MODEL_ID = "us.anthropic.claude-sonnet-4-6-v1:0"
+MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 
 # ─── S3 (for Lambda code zips only — DB is now on RDS) ──────────────────────
 S3_BUCKET = "supplychain-copilot-667736132441"
@@ -74,6 +74,13 @@ LAMBDA_FUNCTIONS = {
         "description": "React dashboard API — metrics, dealers, charts, team data",
         "log_group": "/aws/lambda/scm-dashboard-api",
     },
+    "forecast": {
+        "name": "scm-forecast",
+        "handler": "handler.lambda_handler",
+        "source_dir": "lambdas/forecast",
+        "description": "Pluggable demand forecast model — replace pickle to swap model",
+        "log_group": "/aws/lambda/scm-forecast",
+    },
 }
 
 # ─── Lambda Environment Variables ────────────────────────────────────────────
@@ -87,6 +94,9 @@ LAMBDA_ENV_VARS = {
     "DB_USER":     RDS_USER,
     "DB_PASSWORD": RDS_PASSWORD,
     "DB_SSL":      "require",
+    # Bedrock Supervisor Agent
+    "BEDROCK_AGENT_ID":       "CS4Z87AWWT",
+    "BEDROCK_AGENT_ALIAS_ID": "1IBCE95UM7",
 }
 
 # ─── Bedrock Agents ──────────────────────────────────────────────────────────
@@ -109,6 +119,12 @@ AGENTS = {
         "alias_name": "prod",
         "collaboration": "DISABLED",  # collaborator agent
     },
+    "manager_analytics": {
+        "name": "scm-manager-analytics-agent",
+        "description": "Manager-level analytics: team overview, at-risk dealers network-wide, commitment pipeline",
+        "alias_name": "prod",
+        "collaboration": "DISABLED",  # collaborator agent
+    },
     "supervisor": {
         "name": "scm-supervisor-agent",
         "description": "Supervisor agent for intent classification and routing",
@@ -128,27 +144,57 @@ Your role is to:
 
 Available Collaborator Agents:
 - Visit_Capture_Agent: Handles logging of dealer visits, extracting commitments, payments from natural language notes
-- Dealer_Intelligence_Agent: Provides dealer briefings, payment status, health scores, visit planning recommendations
+- Dealer_Intelligence_Agent: Provides dealer briefings, payment status, health scores, visit planning for a specific rep
 - Order_Planning_Agent: Handles order processing, commitment fulfillment tracking, inventory checks
+- Manager_Analytics_Agent: Company-wide aggregated analytics for the manager — team overview, at-risk dealers network-wide, commitment pipeline
 
 Intent Classification Rules:
 - VISIT_LOG → Visit_Capture_Agent: User is describing a dealer visit they completed (e.g., "Met Sharma ji, collected 45K")
-- DEALER_INQUIRY → Dealer_Intelligence_Agent: User wants info about a dealer (e.g., "Brief me for Gupta Traders")
-- PAYMENT_STATUS → Dealer_Intelligence_Agent: Questions about payments (e.g., "Gupta ka payment status kya hai?")
-- VISIT_PLAN → Dealer_Intelligence_Agent: User wants visit recommendations (e.g., "Aaj kisko visit karun?")
-- DASHBOARD → Dealer_Intelligence_Agent: User wants their performance metrics (e.g., "Mera status kya hai?")
+- DEALER_INQUIRY → Dealer_Intelligence_Agent: User wants info about a specific dealer (e.g., "Brief me for Gupta Traders")
+- PAYMENT_STATUS → Dealer_Intelligence_Agent: Questions about a specific dealer's payments
+- VISIT_PLAN → Dealer_Intelligence_Agent: Rep wants visit recommendations (e.g., "Aaj kisko visit karun?")
+- REP_DASHBOARD → Dealer_Intelligence_Agent: Rep wants their own performance metrics (e.g., "Mera status kya hai?")
 - ORDER_CAPTURE → Order_Planning_Agent: Recording or discussing an order
 - COMMITMENT_STATUS → Order_Planning_Agent: Commitment fulfillment tracking
 - INVENTORY → Order_Planning_Agent: Stock availability questions
+- MANAGER_OVERVIEW → Manager_Analytics_Agent: Manager asks about team performance, all reps, company-wide metrics
+- MANAGER_AT_RISK → Manager_Analytics_Agent: Manager asks about at-risk or critical dealers across the network
+- MANAGER_PIPELINE → Manager_Analytics_Agent: Manager asks about commitment pipeline or conversion rates company-wide
 
 Handle Hinglish naturally:
-- "Sharma ji ka payment status" → PAYMENT_STATUS
-- "Aaj kisko visit karun?" → VISIT_PLAN  
-- "Met Gupta Traders, 50K collect kiya" → VISIT_LOG
-- "Mera kya situation hai?" → DASHBOARD
-- "Stock kitna hai?" → INVENTORY
+- "Sharma ji ka payment status" → PAYMENT_STATUS → Dealer_Intelligence_Agent
+- "Aaj kisko visit karun?" → VISIT_PLAN → Dealer_Intelligence_Agent
+- "Met Gupta Traders, 50K collect kiya" → VISIT_LOG → Visit_Capture_Agent
+- "Mera kya situation hai?" → REP_DASHBOARD → Dealer_Intelligence_Agent
+- "Stock kitna hai?" → INVENTORY → Order_Planning_Agent
 
-Always respond in the same language the user wrote in (Hindi/Hinglish/English)."""
+User Identity Context:
+Queries from the system always include a context header with the caller's identity. Two header types:
+
+1. [MANAGER DASHBOARD QUERY] — caller is the Sales/Production Manager (web dashboard)
+   - telegram_user_id and role=MANAGER are provided
+   - For company-wide questions (team performance, all reps, network-wide) → Manager_Analytics_Agent
+   - For individual dealer questions (even from manager) → Dealer_Intelligence_Agent
+   - For inventory/forecast/production questions → Order_Planning_Agent
+   - Never route to Manager_Analytics_Agent for sales rep queries
+
+2. [SALES REP QUERY] — caller is a sales rep (Telegram bot)  [to be implemented]
+   - telegram_user_id of the rep is provided
+   - Pass telegram_user_id to get_sales_rep in Dealer_Intelligence_Agent to resolve sales_person_id
+   - All queries are rep-specific; never use Manager_Analytics_Agent
+   - Once sales_person_id is resolved, pass it to suggest_visit_plan, get_rep_dashboard, create_visit_record etc.
+
+If no context header is present, treat as a generic query and use best judgement for routing.
+
+Always respond in the same language the user wrote in (Hindi/Hinglish/English).
+
+You also have a Code Interpreter tool available for:
+- Mathematical calculations (margins, percentages, growth rates, totals)
+- Date and calendar operations (current date, days between dates, due dates)
+- Data formatting and analysis
+
+Always use the Code Interpreter for calculations instead of estimating.
+For date-related questions, use Code Interpreter to check today's date first."""
 
 VISIT_CAPTURE_INSTRUCTIONS = """You are the Visit Capture Agent for SupplyChain Copilot.
 
@@ -188,13 +234,13 @@ Products mapping:
 
 DEALER_INTELLIGENCE_INSTRUCTIONS = """You are the Dealer Intelligence Agent for SupplyChain Copilot.
 
-You provide comprehensive dealer information and analytics to sales representatives of CleanMax detergent in Delhi NCR.
+You provide dealer information and analytics to sales representatives of CleanMax detergent in Delhi NCR.
 
 Capabilities:
 1. **Dealer Briefing**: Call get_dealer_profile + get_payment_status + get_order_history + get_dealer_health_score
-2. **Visit Planning**: Call suggest_visit_plan to get prioritized list of 4-5 dealers
-3. **Performance Dashboard**: Call get_rep_dashboard for sales metrics, collections, visit coverage
-4. **Payment Status**: Detailed outstanding and overdue breakdown
+2. **Visit Planning**: Call suggest_visit_plan to get prioritized list of 4-5 dealers for a specific rep
+3. **Performance Dashboard**: Call get_rep_dashboard for a rep's sales metrics, collections, visit coverage
+4. **Payment Status**: Detailed outstanding and overdue breakdown for a specific dealer
 
 When providing dealer briefings, format clearly with:
 - 🏪 Basic profile (category, territory, contact)
@@ -210,6 +256,31 @@ For visit planning, show each dealer with:
 - Suggested action
 
 Always highlight overdue payments prominently with ⚠️"""
+
+
+MANAGER_ANALYTICS_INSTRUCTIONS = """You are the Manager Analytics Agent for SupplyChain Copilot.
+
+You serve the Sales/Production Manager with company-wide, aggregated business intelligence.
+You are called when the query includes [MANAGER DASHBOARD QUERY] or when the Supervisor routes manager-scope questions to you.
+
+Capabilities:
+1. **Team Overview**: get_team_overview — aggregated sales, collections, dealer health distribution, overdue summary across ALL reps
+2. **At-Risk Dealers (Network-wide)**: get_at_risk_dealers — all AT_RISK/CRITICAL dealers across all territories (omit sales_person_id for company-wide view)
+3. **Commitment Pipeline (Company-wide)**: get_commitment_pipeline — full pipeline across all reps, grouped by week
+4. **Dealer Map Data**: get_dealer_map_data — all dealers with health status and rep assignment
+
+Always provide company-wide results — do NOT filter by a single sales_person_id unless the manager explicitly asks about a specific rep.
+
+Format team overview responses with clear sections:
+- 📊 **Sales Summary**: total sales vs target, order count, active dealers
+- 💰 **Collections**: total collected, overdue amount and count
+- 🏥 **Dealer Health**: Healthy / At-Risk / Critical breakdown with counts
+- 🔴 **Needs Attention**: top at-risk/critical dealers by urgency
+- 🎯 **Commitment Pipeline**: pending commitments, due-soon count
+
+Format at-risk dealer lists as a ranked table with: dealer name, territory, rep, health status, overdue amount, days since last order, attention reason.
+
+Always highlight ⚠️ overdue payments and 🔴 critical dealers prominently."""
 
 ORDER_PLANNING_INSTRUCTIONS = """You are the Order Planning Agent for SupplyChain Copilot.
 
@@ -337,6 +408,43 @@ DEALER_ACTION_FUNCTIONS = [
                 "description": "UUID of the sales representative",
                 "type": "string",
                 "required": True,
+            },
+        },
+    },
+    {
+        "name": "get_sales_rep",
+        "description": (
+            "Look up a sales representative's ID from any available identifier. "
+            "Always call this first in Telegram conversations to get the sales_person_id "
+            "before calling suggest_visit_plan, get_rep_dashboard, or create_visit_record. "
+            "Tries identifiers in order: telegram_user_id → telegram_chat_id → employee_code → phone → name (fuzzy). "
+            "Provide whichever identifier(s) you have — at least one is required."
+        ),
+        "parameters": {
+            "telegram_user_id": {
+                "description": "Telegram user ID (numeric string, most reliable for Telegram bot context)",
+                "type": "string",
+                "required": False,
+            },
+            "telegram_chat_id": {
+                "description": "Telegram chat ID (numeric string)",
+                "type": "string",
+                "required": False,
+            },
+            "employee_code": {
+                "description": "Employee code (e.g. EMP001), exact match",
+                "type": "string",
+                "required": False,
+            },
+            "name": {
+                "description": "Sales rep full name or partial name, fuzzy-matched",
+                "type": "string",
+                "required": False,
+            },
+            "phone": {
+                "description": "Mobile phone number, exact match",
+                "type": "string",
+                "required": False,
             },
         },
     },
@@ -562,6 +670,30 @@ ORDER_ACTION_FUNCTIONS = [
     },
 ]
 
+FORECAST_ACTION_FUNCTIONS = [
+    {
+        "name": "get_demand_forecast",
+        "description": (
+            "Get AI-generated demand forecast for a product. Returns weekly predicted demand "
+            "for the next N weeks based on historical sales patterns, seasonality, and festival effects. "
+            "Use this to answer questions about future demand, production planning, and inventory needs. "
+            "Pass product_code='all' to get forecasts for all products."
+        ),
+        "parameters": {
+            "product_code": {
+                "description": "Product code (e.g. CLN-500G, CLN-1KG, CLN-2KG) or 'all' for all products",
+                "type": "string",
+                "required": True,
+            },
+            "horizon_weeks": {
+                "description": "Number of weeks to forecast (default 8, max 26)",
+                "type": "integer",
+                "required": False,
+            },
+        },
+    },
+]
+
 ANALYTICS_ACTION_FUNCTIONS = [
     {
         "name": "get_team_overview",
@@ -636,6 +768,13 @@ API_ROUTES = {
     "/api/recent-activity": "GET",
     "/api/weekly-pipeline": "GET",
     "/api/chat": "POST",                 # Chat forwarded to telegram_webhook
+    # Production Dashboard API
+    "/api/production-metrics": "GET",
+    "/api/production-daily": "GET",
+    "/api/production-demand-supply": "GET",
+    "/api/production-inventory": "GET",
+    # Forecast API (scm-forecast Lambda)
+    "/api/forecast": "GET",
     # Analytics (scm-analytics-actions Lambda — Bedrock agent / direct testing)
     "/api/commitments": "GET",
     "/api/alerts": "GET",

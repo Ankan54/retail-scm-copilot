@@ -1,18 +1,20 @@
 import { useState } from "react";
 import {
   LayoutDashboard, MessageSquare, Menu, Search, Filter,
-  ArrowUpRight, Bell, Zap, ChevronDown,
+  ArrowUpRight, Bell, Zap, ChevronDown, IndianRupee, Factory,
 } from "lucide-react";
 import { ComingSoonBtn } from "./components";
 import { T, fmt } from "./api";
 import { DEALERS, COMMITMENT_DATA } from "./data";
 import DashboardTab from "./DashboardTab";
+import ProductionDashboardTab from "./ProductionDashboardTab";
 import ChatTab from "./ChatTab";
 import "./App.css";
 
 export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [sidebar, setSidebar] = useState(true);
+  const [dashView, setDashView] = useState("sales");
 
   const atRisk = DEALERS.filter(d => d.health !== "healthy").length;
   const totalDealers = DEALERS.length;
@@ -29,8 +31,8 @@ export default function App() {
           </div>
           {sidebar && (
             <div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", letterSpacing: "-0.3px" }}>Retail Sales</div>
-              <div style={{ fontSize: 9, fontWeight: 600, color: "#8b8fad", letterSpacing: "1.5px", textTransform: "uppercase" }}>Copilot</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", letterSpacing: "-0.3px" }}>MSME Retail Copilot</div>
+              <div style={{ fontSize: 9, fontWeight: 500, color: "#8b8fad", letterSpacing: "0.5px" }}>AI copilot for MSME manufacturers</div>
             </div>
           )}
         </div>
@@ -85,8 +87,8 @@ export default function App() {
         {/* Header */}
         <div style={{ padding: "12px 28px", borderBottom: "1px solid " + T.cardBorder, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff" }}>
           <div>
-            <h1 style={{ fontSize: 20, fontWeight: 800, color: T.heading }}>Welcome back, Ankan!</h1>
-            <p style={{ fontSize: 12, color: T.textMuted, marginTop: 1 }}>{tab === "dashboard" ? "Track your dealer network, commitments, and revenue." : "Chat with your SupplyChain AI assistant."}</p>
+            <h1 style={{ fontSize: 20, fontWeight: 800, color: T.heading }}>Welcome back, Manager!</h1>
+            <p style={{ fontSize: 12, color: T.textMuted, marginTop: 1 }}>{tab === "dashboard" ? (dashView === "sales" ? "Track your dealer network, commitments, and revenue." : "Monitor production, capacity, and inventory health.") : "Chat with your AI copilot."}</p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, background: T.bg, borderRadius: 9, padding: "7px 14px", border: "1px solid " + T.cardBorder }}>
@@ -113,7 +115,31 @@ export default function App() {
 
         {/* Tab Content */}
         <div style={{ flex: 1, overflow: "auto", padding: tab === "chat" ? 0 : 24 }}>
-          {tab === "dashboard" && <DashboardTab />}
+          {tab === "dashboard" && (
+            <div>
+              {/* Sales / Production toggle */}
+              <div style={{ display: "flex", gap: 4, marginBottom: 20, background: T.bg, padding: 4, borderRadius: 12, width: "fit-content" }}>
+                {[
+                  { id: "sales", label: "Sales", icon: IndianRupee },
+                  { id: "production", label: "Production", icon: Factory },
+                ].map(v => (
+                  <button key={v.id} onClick={() => setDashView(v.id)} style={{
+                    padding: "8px 20px", borderRadius: 10, fontSize: 13, fontWeight: 600,
+                    border: "none", cursor: "pointer", fontFamily: "inherit",
+                    display: "flex", alignItems: "center", gap: 6,
+                    background: dashView === v.id ? "#fff" : "transparent",
+                    color: dashView === v.id ? T.primary : T.textMuted,
+                    boxShadow: dashView === v.id ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                    transition: "all .2s",
+                  }}>
+                    <v.icon size={15} /> {v.label}
+                  </button>
+                ))}
+              </div>
+              {dashView === "sales" && <DashboardTab />}
+              {dashView === "production" && <ProductionDashboardTab />}
+            </div>
+          )}
           {tab === "chat" && <ChatTab />}
         </div>
       </div>

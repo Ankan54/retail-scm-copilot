@@ -54,6 +54,14 @@ def lambda_handler(event, context):
             )
         elif function == "get_rep_dashboard":
             result = get_rep_dashboard(params["sales_person_id"])
+        elif function == "get_sales_rep":
+            result = get_sales_rep(
+                telegram_user_id=params.get("telegram_user_id"),
+                telegram_chat_id=params.get("telegram_chat_id"),
+                employee_code=params.get("employee_code"),
+                name=params.get("name"),
+                phone=params.get("phone"),
+            )
         else:
             result = {"error": f"Unknown function: {function}"}
 
@@ -144,6 +152,109 @@ def resolve_entity(entity_type: str, entity_name: str, sales_person_id: str = No
                     "candidates": [{"id": e[0], "name": e[1]} for e in matches[:3]],
                 }
             return {"success": False, "confidence": 0, "candidates": []}
+    finally:
+        conn.close()
+
+
+# ─── get_sales_rep ────────────────────────────────────────────────────────────
+
+def get_sales_rep(telegram_user_id=None, telegram_chat_id=None,
+                  employee_code=None, name=None, phone=None) -> dict:
+    """
+    Resolve a sales rep identity to their sales_person_id.
+    Tries identifiers in priority order:
+      1. telegram_user_id  (most reliable in Telegram context)
+      2. telegram_chat_id
+      3. employee_code     (unique, exact match)
+      4. phone             (exact match)
+      5. name              (fuzzy match, 70% threshold)
+    Returns sales_person_id, name, employee_code, role, territory on success.
+    """
+    if not any([telegram_user_id, telegram_chat_id, employee_code, name, phone]):
+        return {"success": False, "error": "At least one identifier must be provided"}
+
+    conn = get_db()
+    try:
+        def _lookup(where_clause, value):
+            return _fetchone(conn, f"""
+                SELECT sp.sales_person_id, sp.name, sp.employee_code, sp.role,
+                       STRING_AGG(DISTINCT t.name, ' / ') AS territory
+                FROM sales_persons sp
+                LEFT JOIN territory_assignments ta ON ta.sales_person_id = sp.sales_person_id
+                LEFT JOIN territories t ON t.territory_id = ta.territory_id
+                WHERE {where_clause} AND sp.is_active = TRUE
+                GROUP BY sp.sales_person_id, sp.name, sp.employee_code, sp.role
+            """, (value,))
+
+        row = None
+
+        if telegram_user_id:
+            row = _lookup("sp.telegram_user_id = %s", telegram_user_id)
+        if not row and telegram_chat_id:
+            row = _lookup("sp.telegram_chat_id = %s", telegram_chat_id)
+        if not row and employee_code:
+            row = _lookup("sp.employee_code = %s", employee_code)
+        if not row and phone:
+            row = _lookup("sp.phone = %s", phone)
+
+        if row:
+            return {
+                "success": True,
+                "sales_person_id": row["sales_person_id"],
+                "name": row["name"],
+                "employee_code": row["employee_code"],
+                "role": row["role"],
+                "territory": row.get("territory") or "—",
+            }
+
+        # Fuzzy name match as last resort
+        if name:
+            all_reps = _fetchall(conn,
+                "SELECT sales_person_id, name FROM sales_persons WHERE is_active = TRUE")
+            if FUZZY_AVAILABLE:
+                entities = {r["sales_person_id"]: r["name"] for r in all_reps}
+                matches = fuzz_process.extract(
+                    name, entities, scorer=fuzz.token_sort_ratio, limit=3
+                )
+                if matches and matches[0][1] >= 70:
+                    best_id = matches[0][2]
+                    row = _lookup("sp.sales_person_id = %s", best_id)
+                    if row:
+                        return {
+                            "success": True,
+                            "sales_person_id": row["sales_person_id"],
+                            "name": row["name"],
+                            "employee_code": row["employee_code"],
+                            "role": row["role"],
+                            "territory": row.get("territory") or "—",
+                            "match_confidence": round(matches[0][1] / 100, 2),
+                        }
+                candidates = [{"name": m[0], "score": m[1]} for m in matches]
+                return {
+                    "success": False,
+                    "error": f"No confident match for name '{name}'",
+                    "candidates": candidates,
+                }
+            else:
+                # Simple substring fallback
+                name_lower = name.lower()
+                for r in all_reps:
+                    if name_lower in r["name"].lower() or r["name"].lower() in name_lower:
+                        row = _lookup("sp.sales_person_id = %s", r["sales_person_id"])
+                        if row:
+                            return {
+                                "success": True,
+                                "sales_person_id": row["sales_person_id"],
+                                "name": row["name"],
+                                "employee_code": row["employee_code"],
+                                "role": row["role"],
+                                "territory": row.get("territory") or "—",
+                            }
+
+        return {
+            "success": False,
+            "error": "No sales rep found matching the provided identifiers",
+        }
     finally:
         conn.close()
 
