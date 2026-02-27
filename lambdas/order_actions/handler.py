@@ -409,6 +409,29 @@ def generate_alert(params: dict) -> dict:
              message, ts, ts))
         conn.commit()
         conn.close()
+
+        # ── Send Telegram notification to manager ─────────────────────────
+        try:
+            from shared.db_utils import get_manager_telegram_chat_id, mark_alert_sent
+            from shared.telegram_utils import send_message
+
+            manager_chat_id = get_manager_telegram_chat_id()
+            if manager_chat_id:
+                priority_emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(priority, "🔔")
+                tg_text = (
+                    f"{priority_emoji} <b>{alert_type.replace('_', ' ').title()}</b>\n"
+                    f"{message}"
+                )
+                if send_message(manager_chat_id, tg_text, parse_mode="HTML"):
+                    mark_alert_sent(alert_id)
+                    logger.info(f"📲 Telegram alert sent to manager | alert_id={alert_id}")
+                else:
+                    logger.warning(f"⚠️  Telegram alert send failed | alert_id={alert_id}")
+            else:
+                logger.info("ℹ️  Manager has no telegram_chat_id — skipping Telegram notification")
+        except Exception as tg_err:
+            logger.warning(f"⚠️  Telegram notification error (alert still created): {tg_err}")
+
         return {
             "success": True,
             "alert_id": alert_id,

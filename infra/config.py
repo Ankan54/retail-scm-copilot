@@ -3,6 +3,11 @@ Centralized configuration for SupplyChain Copilot AWS infrastructure.
 All resource names, ARNs, and constants in one place.
 """
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # ─── AWS Account & Region ───────────────────────────────────────────────────
 ACCOUNT_ID = "667736132441"
 REGION = "us-east-1"
@@ -96,7 +101,10 @@ LAMBDA_ENV_VARS = {
     "DB_SSL":      "require",
     # Bedrock Supervisor Agent
     "BEDROCK_AGENT_ID":       "CS4Z87AWWT",
-    "BEDROCK_AGENT_ALIAS_ID": "1IBCE95UM7",
+    "BEDROCK_AGENT_ALIAS_ID": "Z7QHZWIEKT",
+    # Telegram Bot
+    "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+    "TELEGRAM_WEBHOOK_SECRET": os.environ.get("TELEGRAM_WEBHOOK_SECRET", ""),
 }
 
 # ─── Bedrock Agents ──────────────────────────────────────────────────────────
@@ -181,11 +189,14 @@ Queries from the system always include a context header with the caller's identi
    - NEVER route the same manager query to both Manager_Analytics_Agent and Order_Planning_Agent
    - Never route to Manager_Analytics_Agent for sales rep queries
 
-2. [SALES REP QUERY] — caller is a sales rep (Telegram bot)  [to be implemented]
-   - telegram_user_id of the rep is provided
-   - Pass telegram_user_id to get_sales_rep in Dealer_Intelligence_Agent to resolve sales_person_id
-   - All queries are rep-specific; never use Manager_Analytics_Agent
-   - Once sales_person_id is resolved, pass it to suggest_visit_plan, get_rep_dashboard, create_visit_record etc.
+2. [SALES REP QUERY] — caller is a sales rep (Telegram bot)
+   - telegram_user_id of the rep is provided in the header
+   - FIRST call get_sales_rep with telegram_user_id to resolve sales_person_id
+   - All subsequent calls pass the resolved sales_person_id
+   - NEVER route to Manager_Analytics_Agent
+   - Visit planning / dealer briefings / rep dashboard → Dealer_Intelligence_Agent
+   - Visit logging / commitments → Visit_Capture_Agent
+   - Orders / inventory / commitment status → Order_Planning_Agent
 
 If no context header is present, treat as a generic query and use best judgement for routing.
 

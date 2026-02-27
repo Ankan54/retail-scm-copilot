@@ -215,6 +215,102 @@ def save_web_session(session_id: str, agent_session_id: str,
         conn.close()
 
 
+# ─── Telegram sales rep helpers ───────────────────────────────────────────────
+
+def lookup_sales_person_by_telegram(telegram_user_id: str) -> Optional[dict]:
+    """Look up a sales rep by their Telegram user ID. Returns the row or None."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT sales_person_id, name, employee_code, role,
+                   telegram_user_id, telegram_chat_id
+            FROM sales_persons
+            WHERE telegram_user_id = %s AND is_active = TRUE
+            LIMIT 1
+            """,
+            (telegram_user_id,),
+        )
+        return row_to_dict(cur.fetchone())
+    finally:
+        conn.close()
+
+
+def register_telegram_user(employee_code: str, telegram_user_id: str,
+                            telegram_chat_id: str) -> Optional[dict]:
+    """
+    Link a Telegram user to a sales rep by employee code.
+    Returns the updated row (name, role, sales_person_id) or None if not found.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE sales_persons
+            SET telegram_user_id = %s, telegram_chat_id = %s, updated_at = NOW()
+            WHERE employee_code = %s AND is_active = TRUE
+            RETURNING sales_person_id, name, role, employee_code
+            """,
+            (telegram_user_id, telegram_chat_id, employee_code.upper()),
+        )
+        row = cur.fetchone()
+        if row:
+            conn.commit()
+        return row_to_dict(row)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_manager_telegram_chat_id() -> Optional[str]:
+    """Return the Telegram chat_id of the manager, or None if not set."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT telegram_chat_id
+            FROM sales_persons
+            WHERE role = 'MANAGER' AND is_active = TRUE
+            LIMIT 1
+            """,
+        )
+        row = cur.fetchone()
+        if row and row["telegram_chat_id"]:
+            return str(row["telegram_chat_id"])
+        return None
+    finally:
+        conn.close()
+
+
+def mark_alert_sent(alert_id: str) -> None:
+    """Mark an alert row as notification_sent=TRUE via Telegram."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE alerts
+            SET notification_sent = TRUE,
+                notification_channel = 'telegram',
+                notification_sent_at = NOW(),
+                updated_at = NOW()
+            WHERE alert_id = %s
+            """,
+            (alert_id,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def bedrock_response(action_group: str, function: str, result: dict) -> dict:
     """Format a response for the Bedrock Agent action group protocol."""
     return {
