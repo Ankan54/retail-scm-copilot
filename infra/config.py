@@ -174,8 +174,11 @@ Queries from the system always include a context header with the caller's identi
 1. [MANAGER DASHBOARD QUERY] — caller is the Sales/Production Manager (web dashboard)
    - telegram_user_id and role=MANAGER are provided
    - For company-wide questions (team performance, all reps, network-wide) → Manager_Analytics_Agent
+   - For production vs demand gap, production analytics, supply shortfall, capacity questions → Manager_Analytics_Agent (use get_production_demand_supply)
+   - For commitment pipeline, conversion rates, at-risk dealers → Manager_Analytics_Agent
    - For individual dealer questions (even from manager) → Dealer_Intelligence_Agent
-   - For inventory/forecast/production questions → Order_Planning_Agent
+   - For order capture, stock availability for a specific dealer/order → Order_Planning_Agent
+   - NEVER route the same manager query to both Manager_Analytics_Agent and Order_Planning_Agent
    - Never route to Manager_Analytics_Agent for sales rep queries
 
 2. [SALES REP QUERY] — caller is a sales rep (Telegram bot)  [to be implemented]
@@ -188,13 +191,10 @@ If no context header is present, treat as a generic query and use best judgement
 
 Always respond in the same language the user wrote in (Hindi/Hinglish/English).
 
-You also have a Code Interpreter tool available for:
-- Mathematical calculations (margins, percentages, growth rates, totals)
-- Date and calendar operations (current date, days between dates, due dates)
-- Data formatting and analysis
-
-Always use the Code Interpreter for calculations instead of estimating.
-For date-related questions, use Code Interpreter to check today's date first."""
+You also have a Code Interpreter tool available for complex calculations only — use it sparingly:
+- Multi-step mathematical calculations (e.g., computing weighted averages, compound growth)
+- Do NOT use it just to check today's date — the system context already provides the current date
+- Do NOT use it before routing to a specialized agent — route first, calculate from returned data if needed"""
 
 VISIT_CAPTURE_INSTRUCTIONS = """You are the Visit Capture Agent for SupplyChain Copilot.
 
@@ -749,7 +749,23 @@ ANALYTICS_ACTION_FUNCTIONS = [
             },
         },
     },
+    {
+        "name": "get_production_demand_supply",
+        "description": "Get production vs demand gap analysis: units produced vs units ordered+committed, with shortfall or surplus summary. Use for questions about production gaps, demand coverage, supply shortfalls, or production vs demand for a period.",
+        "parameters": {
+            "period": {
+                "description": "Time period: 'quarter' (current quarter, default), 'month' (current month), '6months' (last 6 months)",
+                "type": "string",
+                "required": False,
+            },
+        },
+    },
 ]
+
+# ─── Dashboard / CloudFront ───────────────────────────────────────────────────
+DASHBOARD_S3_PREFIX  = "dashboard/"       # S3 key prefix for built assets
+DASHBOARD_DIST_DIR   = "dashboard/dist"   # Relative to PROJECT_ROOT
+CLOUDFRONT_COMMENT   = "supplychain-copilot-dashboard"
 
 # ─── API Gateway ──────────────────────────────────────────────────────────────
 API_GATEWAY_NAME = "supplychain-copilot-api"

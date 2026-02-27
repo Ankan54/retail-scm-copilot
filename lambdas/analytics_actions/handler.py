@@ -1,6 +1,6 @@
 """
 Analytics Action Group Lambda Handler (PostgreSQL version)
-Handles: get_team_overview, get_at_risk_dealers, get_commitment_pipeline, get_dealer_map_data
+Handles: get_team_overview, get_at_risk_dealers, get_commitment_pipeline, get_dealer_map_data, get_production_demand_supply
 Read-only operations for the manager dashboard and React frontend.
 """
 import json
@@ -37,6 +37,8 @@ def lambda_handler(event, context):
             result = get_commitment_pipeline(params.get("sales_person_id"), params.get("status_filter"))
         elif function == "get_dealer_map_data":
             result = get_dealer_map_data(params.get("sales_person_id"))
+        elif function == "get_production_demand_supply":
+            result = get_production_demand_supply(params.get("period", "quarter"))
         else:
             result = {"error": f"Unknown function: {function}"}
     except KeyError as e:
@@ -155,11 +157,24 @@ def get_team_overview(period_days: int = 30) -> dict:
 
         commit_row = _fetchone(conn,
             """
-            SELECT COUNT(*) AS pending_count,
-                   SUM(quantity_promised - COALESCE(converted_quantity, 0)) AS pending_qty
+            SELECT COUNT(*) AS total_count,
+                   COUNT(CASE WHEN status = 'CONVERTED' THEN 1 END) AS converted_count,
+                   COUNT(CASE WHEN status IN ('PENDING', 'PARTIAL') THEN 1 END) AS pending_count,
+                   SUM(CASE WHEN status IN ('PENDING', 'PARTIAL') THEN quantity_promised - COALESCE(converted_quantity, 0) ELSE 0 END) AS pending_qty,
+                   SUM(quantity_promised) AS total_qty,
+                   SUM(COALESCE(converted_quantity, 0)) AS converted_qty
             FROM commitments
-            WHERE status IN ('PENDING', 'PARTIAL')
-            """)
+            WHERE commitment_date >= %s
+            """,
+            (since,))
+
+        total_commits = int(commit_row["total_count"] or 0)
+        converted_commits = int(commit_row["converted_count"] or 0)
+        conversion_rate = round(converted_commits / total_commits * 100, 1) if total_commits else 0
+
+        total_qty = int(commit_row["total_qty"] or 0)
+        converted_qty = int(commit_row["converted_qty"] or 0)
+        qty_conversion_rate = round(converted_qty / total_qty * 100, 1) if total_qty else 0
 
         return {
             "success": True,
@@ -180,9 +195,15 @@ def get_team_overview(period_days: int = 30) -> dict:
                 "count": int(overdue_row["overdue_count"] or 0),
                 "amount": float(overdue_row["overdue_amount"] or 0),
             },
-            "pending_commitments": {
-                "count": int(commit_row["pending_count"] or 0),
-                "quantity": int(commit_row["pending_qty"] or 0),
+            "commitments": {
+                "total": total_commits,
+                "converted": converted_commits,
+                "pending": int(commit_row["pending_count"] or 0),
+                "pending_quantity": int(commit_row["pending_qty"] or 0),
+                "conversion_rate_pct": conversion_rate,
+                "total_quantity": total_qty,
+                "converted_quantity": converted_qty,
+                "quantity_conversion_rate_pct": qty_conversion_rate,
             },
         }
     finally:
@@ -320,6 +341,109 @@ def get_dealer_map_data(sales_person_id: str = None) -> dict:
             "dealers": dealer_list,
             "warehouses": rows_to_list(warehouses),
             "total_dealers": len(dealer_list),
+        }
+    finally:
+        conn.close()
+
+
+# ─── get_production_demand_supply ────────────────────────────────────────────
+
+def get_production_demand_supply(period: str = "quarter") -> dict:
+    """Production vs demand gap by month. period: 'quarter' (default), 'month', '6months'."""
+    import calendar as cal
+    conn = get_db()
+    try:
+        today_dt = datetime.now().date()
+
+        if period == "month":
+            start = today_dt.replace(day=1)
+            end = today_dt.replace(day=cal.monthrange(today_dt.year, today_dt.month)[1])
+        elif period == "6months":
+            start = (today_dt - timedelta(days=180)).replace(day=1)
+            end = today_dt
+        else:  # quarter (default)
+            q_start_month = ((today_dt.month - 1) // 3) * 3 + 1
+            start = today_dt.replace(month=q_start_month, day=1)
+            end_month = q_start_month + 2
+            end_year = today_dt.year + (1 if end_month > 12 else 0)
+            end_month = end_month - 12 if end_month > 12 else end_month
+            end = today_dt.replace(year=end_year, month=end_month, day=cal.monthrange(end_year, end_month)[1])
+
+        start_str = start.strftime("%Y-%m-%d")
+        end_str = end.strftime("%Y-%m-%d")
+
+        rows = _fetchall(conn, """
+            WITH months AS (
+                SELECT generate_series(
+                    DATE_TRUNC('month', %s::date),
+                    DATE_TRUNC('month', %s::date),
+                    '1 month'
+                )::date AS month_start
+            ),
+            produced AS (
+                SELECT DATE_TRUNC('month', planned_date::date)::date AS m,
+                       COALESCE(SUM(actual_qty), 0) AS produced
+                FROM production_schedule
+                WHERE planned_date >= %s AND planned_date <= %s
+                  AND status != 'CANCELLED'
+                GROUP BY m
+            ),
+            ordered AS (
+                SELECT DATE_TRUNC('month', o.order_date::date)::date AS m,
+                       COALESCE(SUM(oi.quantity_ordered), 0) AS ordered
+                FROM orders o
+                JOIN order_items oi ON oi.order_id = o.order_id
+                WHERE o.order_date >= %s AND o.order_date <= %s
+                  AND o.status != 'CANCELLED'
+                GROUP BY m
+            ),
+            committed AS (
+                SELECT DATE_TRUNC('month', commitment_date::date)::date AS m,
+                       COALESCE(SUM(quantity_promised), 0) AS committed
+                FROM commitments
+                WHERE commitment_date >= %s AND commitment_date <= %s
+                GROUP BY m
+            )
+            SELECT
+                TO_CHAR(ms.month_start, 'Mon YYYY') AS month,
+                TO_CHAR(ms.month_start, 'YYYY-MM') AS ym,
+                COALESCE(p.produced, 0) AS produced,
+                COALESCE(o.ordered, 0) AS ordered,
+                COALESCE(c.committed, 0) AS committed,
+                COALESCE(o.ordered, 0) + COALESCE(c.committed, 0) AS total_demand,
+                COALESCE(o.ordered, 0) + COALESCE(c.committed, 0) - COALESCE(p.produced, 0) AS demand_gap
+            FROM months ms
+            LEFT JOIN produced p  ON DATE_TRUNC('month', ms.month_start) = p.m
+            LEFT JOIN ordered o   ON DATE_TRUNC('month', ms.month_start) = o.m
+            LEFT JOIN committed c ON DATE_TRUNC('month', ms.month_start) = c.m
+            ORDER BY ms.month_start
+        """, (start_str, end_str, start_str, end_str, start_str, end_str, start_str, end_str))
+
+        months_data = rows_to_list(rows)
+        for r in months_data:
+            r["produced"] = int(r.get("produced") or 0)
+            r["ordered"] = int(r.get("ordered") or 0)
+            r["committed"] = int(r.get("committed") or 0)
+            r["total_demand"] = int(r.get("total_demand") or 0)
+            r["demand_gap"] = int(r.get("demand_gap") or 0)
+
+        total_produced = sum(r["produced"] for r in months_data)
+        total_demand = sum(r["total_demand"] for r in months_data)
+        total_gap = total_demand - total_produced
+
+        return {
+            "success": True,
+            "period": period,
+            "period_start": start_str,
+            "period_end": end_str,
+            "months": months_data,
+            "summary": {
+                "total_produced": total_produced,
+                "total_demand": total_demand,
+                "demand_gap": total_gap,
+                "gap_pct": round(total_gap / total_demand * 100, 1) if total_demand else 0,
+                "status": "SHORTFALL" if total_gap > 0 else "SURPLUS",
+            },
         }
     finally:
         conn.close()

@@ -53,34 +53,56 @@ def _get_bedrock_client():
     return boto3.client("bedrock-agent-runtime", region_name=REGION)
 
 
-def _invoke_agent(message: str, session_id: str) -> dict:
+def _log_truncated(label: str, value, max_len: int = 300):
+    """Log a value, truncating long strings/dicts for readability."""
+    if isinstance(value, (dict, list)):
+        s = json.dumps(value, default=str)
+    else:
+        s = str(value)
+    if len(s) > max_len:
+        s = s[:max_len] + f"... [{len(s)} chars total]"
+    logger.info(f"{label}: {s}")
+
+
+def _invoke_agent(message: str, session_id: str, context=None) -> dict:
     """
     Invoke the Bedrock Supervisor Agent.
     Logs all events to CloudWatch in real-time.
     Returns { text, agent, session_id, traces[] }.
     """
-    logger.info(f"🚀 Starting agent invocation | Session: {session_id}")
-    logger.info(f"📝 User message: {message}")
+    logger.info(f"🚀 Starting agent invocation | Session: {session_id} | AgentID: {AGENT_ID} | Alias: {AGENT_ALIAS_ID}")
+    _log_truncated("📝 User message", message, 500)
 
     start_time = time.time()
     client = _get_bedrock_client()
 
-    response = client.invoke_agent(
-        agentId=AGENT_ID,
-        agentAliasId=AGENT_ALIAS_ID,
-        sessionId=session_id,
-        inputText=message,
-        enableTrace=True,
-    )
+    try:
+        response = client.invoke_agent(
+            agentId=AGENT_ID,
+            agentAliasId=AGENT_ALIAS_ID,
+            sessionId=session_id,
+            inputText=message,
+            enableTrace=True,
+        )
+    except Exception as e:
+        logger.error(f"❌ invoke_agent API call failed: {type(e).__name__}: {e}", exc_info=True)
+        raise
 
     full_text = ""
     agent_name = "Supervisor"
     traces = []
     event_count = 0
+    error_count = 0
 
     for event in response["completion"]:
         event_count += 1
         elapsed = time.time() - start_time
+
+        # Warn if Lambda is running low on time
+        if context and hasattr(context, "get_remaining_time_in_millis"):
+            remaining_ms = context.get_remaining_time_in_millis()
+            if remaining_ms < 15000:
+                logger.warning(f"⏰ [{elapsed:.2f}s] LOW TIME WARNING: {remaining_ms}ms remaining")
 
         # Text chunk
         if "chunk" in event:
@@ -88,64 +110,85 @@ def _invoke_agent(message: str, session_id: str) -> dict:
             if "bytes" in chunk:
                 text = chunk["bytes"].decode("utf-8")
                 full_text += text
-                # Log chunk (truncated for readability)
-                chunk_preview = text[:80].replace('\n', ' ')
-                logger.info(f"💬 [{elapsed:.2f}s] CHUNK: {chunk_preview}...")
+                chunk_preview = text[:120].replace('\n', ' ')
+                logger.info(f"💬 [{elapsed:.2f}s] CHUNK ({len(text)} chars): {chunk_preview}")
 
         # Trace event
         if "trace" in event:
             trace = event["trace"].get("trace", {})
             orch = trace.get("orchestrationTrace", {})
+
+            # ── Invocation input ──────────────────────────────────────────
             invocation_input = orch.get("invocationInput", {})
 
             # Sub-agent routing
             collab = invocation_input.get("agentCollaboratorInvocationInput", {})
             if collab.get("agentCollaboratorName"):
                 agent_name = collab["agentCollaboratorName"].replace("_", " ")
-                logger.info(f"🤖 [{elapsed:.2f}s] ROUTING: → {agent_name}")
-                traces.append({
-                    "type": "agent",
-                    "step": f"Routing to {agent_name}...",
-                    "agent": agent_name,
-                })
+                collab_input = collab.get("input", {})
+                logger.info(f"🤖 [{elapsed:.2f}s] ROUTING → {agent_name}")
+                _log_truncated(f"   ↳ input to {agent_name}", collab_input)
+                traces.append({"type": "agent", "step": f"Routing to {agent_name}...", "agent": agent_name})
 
             # Tool/function call
             action_group = invocation_input.get("actionGroupInvocationInput", {})
             if action_group.get("function"):
                 tool_name = action_group["function"]
                 params = action_group.get("parameters", [])
-                logger.info(f"🔧 [{elapsed:.2f}s] TOOL CALL: {tool_name} | Params: {len(params)}")
-                traces.append({
-                    "type": "tool",
-                    "step": f"Calling {tool_name}...",
-                    "tool": tool_name,
-                })
+                param_dict = {p["name"]: p.get("value") for p in params}
+                logger.info(f"🔧 [{elapsed:.2f}s] TOOL CALL: {tool_name}")
+                _log_truncated(f"   ↳ params", param_dict)
+                traces.append({"type": "tool", "step": f"Calling {tool_name}...", "tool": tool_name})
 
             # Code interpreter
             code_interp = invocation_input.get("codeInterpreterInvocationInput", {})
             if code_interp:
-                logger.info(f"🧮 [{elapsed:.2f}s] CODE INTERPRETER: Running calculation")
-                traces.append({
-                    "type": "tool",
-                    "step": "Running calculation...",
-                    "tool": "CodeInterpreter",
-                })
+                code = code_interp.get("code", "")[:200]
+                logger.info(f"🧮 [{elapsed:.2f}s] CODE INTERPRETER | code: {code}")
+                traces.append({"type": "tool", "step": "Running calculation...", "tool": "CodeInterpreter"})
 
-            # Observation (tool results)
+            # ── Observation (tool/agent results) ──────────────────────────
             observation = orch.get("observation", {})
             if observation:
                 obs_type = observation.get("type", "unknown")
-                logger.info(f"👁️  [{elapsed:.2f}s] OBSERVATION: {obs_type}")
 
-            # Rationale (agent thinking)
+                # Tool response
+                ag_output = observation.get("actionGroupInvocationOutput", {})
+                if ag_output:
+                    _log_truncated(f"👁️  [{elapsed:.2f}s] TOOL RESPONSE ({obs_type})", ag_output.get("text", ""))
+
+                # Sub-agent response
+                collab_output = observation.get("agentCollaboratorInvocationOutput", {})
+                if collab_output:
+                    collab_resp = collab_output.get("output", {})
+                    _log_truncated(f"👁️  [{elapsed:.2f}s] AGENT RESPONSE from {collab_output.get('agentCollaboratorName','?')}", collab_resp)
+
+                # Code interpreter output
+                ci_output = observation.get("codeInterpreterInvocationOutput", {})
+                if ci_output:
+                    _log_truncated(f"👁️  [{elapsed:.2f}s] CODE OUTPUT", ci_output)
+
+                if not ag_output and not collab_output and not ci_output:
+                    logger.info(f"👁️  [{elapsed:.2f}s] OBSERVATION: {obs_type}")
+
+            # ── Rationale (LLM thinking) ──────────────────────────────────
             rationale = orch.get("rationale", {})
             if rationale.get("text"):
-                thinking = rationale["text"][:100].replace('\n', ' ')
-                logger.info(f"💭 [{elapsed:.2f}s] THINKING: {thinking}...")
+                _log_truncated(f"💭 [{elapsed:.2f}s] THINKING", rationale["text"], 400)
+
+            # ── Failure / error traces ─────────────────────────────────────
+            failure = trace.get("failureTrace", {})
+            if failure:
+                error_count += 1
+                logger.error(f"❌ [{elapsed:.2f}s] FAILURE TRACE: {json.dumps(failure, default=str)}")
 
     total_time = time.time() - start_time
-    logger.info(f"✅ Agent invocation complete | Time: {total_time:.2f}s | Events: {event_count}")
-    logger.info(f"📊 Final agent: {agent_name} | Traces: {len(traces)} | Response length: {len(full_text)} chars")
+    logger.info(
+        f"✅ Invocation complete | Time: {total_time:.2f}s | Events: {event_count} | "
+        f"Errors: {error_count} | Agent: {agent_name} | Response: {len(full_text)} chars"
+    )
+    if full_text:
+        _log_truncated("📤 Final response", full_text, 500)
 
     return {
         "text": full_text.strip() or "I'm sorry, I couldn't generate a response. Please try again.",
@@ -189,7 +232,7 @@ def _save_session(session_id: str, agent_session_id: str,
         logger.warning(f"⚠️  Failed to save session: {e}")
 
 
-def _process_chat(body: dict) -> dict:
+def _process_chat(body: dict, context=None) -> dict:
     """Core chat logic."""
     message = body.get("message", body.get("query", "")).strip()
     session_id = body.get("session_id", str(uuid.uuid4()))
@@ -207,11 +250,11 @@ def _process_chat(body: dict) -> dict:
         message = _build_manager_context(message)
 
     try:
-        result = _invoke_agent(message, session_id)
+        result = _invoke_agent(message, session_id, context=context)
         _save_session(session_id, session_id, message, result)
         return result
     except Exception as e:
-        logger.error(f"❌ Agent invocation error: {e}", exc_info=True)
+        logger.error(f"❌ Agent invocation error: {type(e).__name__}: {e}", exc_info=True)
         return {
             "text": "I'm having trouble connecting to the agents right now. Please try again in a moment.",
             "agent": "System",
@@ -241,7 +284,7 @@ def lambda_handler(event, context):
     except (json.JSONDecodeError, TypeError):
         body = {}
 
-    result = _process_chat(body)
+    result = _process_chat(body, context=context)
 
     if is_function_url:
         # Function URL: CORS headers added by service

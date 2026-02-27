@@ -8,8 +8,9 @@ Usage:
     python infra/setup.py --step upload_db   # Just upload DB
     python infra/setup.py --step lambdas     # Just package + deploy Lambdas
     python infra/setup.py --step agents      # Just create Bedrock agents
-    python infra/setup.py --step api         # Just create API Gateway
-    python infra/setup.py --dry-run          # Print plan without executing
+    python infra/setup.py --step api              # Just create API Gateway
+    python infra/setup.py --step deploy_dashboard # Build + deploy React dashboard to S3/CloudFront
+    python infra/setup.py --dry-run               # Print plan without executing
 """
 
 import os
@@ -45,6 +46,7 @@ from infra.config import (
     ORDER_ACTION_FUNCTIONS, FORECAST_ACTION_FUNCTIONS,
     ANALYTICS_ACTION_FUNCTIONS,
     API_GATEWAY_NAME, API_STAGE, RESOURCE_TAGS,
+    DASHBOARD_S3_PREFIX, DASHBOARD_DIST_DIR, CLOUDFRONT_COMMENT,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -69,12 +71,13 @@ def save_state(state: dict):
 def get_clients():
     session = boto3.session.Session(region_name=REGION)
     return {
-        "s3": session.client("s3"),
-        "lambda": session.client("lambda"),
-        "bedrock": session.client("bedrock-agent"),
-        "logs": session.client("logs"),
-        "apigateway": session.client("apigateway"),
-        "iam": session.client("iam"),
+        "s3":          session.client("s3"),
+        "lambda":      session.client("lambda"),
+        "bedrock":     session.client("bedrock-agent"),
+        "logs":        session.client("logs"),
+        "apigateway":  session.client("apigateway"),
+        "iam":         session.client("iam"),
+        "cloudfront":  boto3.client("cloudfront"),   # global service, no region
     }
 
 
@@ -547,8 +550,8 @@ def deploy_agents(clients, state, dry_run=False):
             # Prepare agent
             prepare_agent(bedrock, agent_id, dry_run)
 
-            # Create alias
-            alias_id = create_agent_alias(bedrock, agent_id, "prod", dry_run)
+            # Create alias — refresh=True snapshots latest DRAFT into a new version
+            alias_id = create_agent_alias(bedrock, agent_id, "prod", dry_run, refresh=True)
             state["agents"][agent_key]["alias_id"] = alias_id
 
             # Build alias ARN for later use with supervisor
@@ -973,6 +976,215 @@ def enable_code_interpreter(clients, state, dry_run=False):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STEP 8: Build + Deploy React Dashboard to S3 + CloudFront
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _s3_sync(s3_client, local_dir: Path, bucket: str, prefix: str):
+    """Upload all files in local_dir to s3://bucket/prefix with cache headers, delete orphans."""
+    import mimetypes
+
+    CONTENT_TYPES = {
+        ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
+        ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
+        ".json": "application/json", ".txt": "text/plain",
+        ".woff2": "font/woff2", ".woff": "font/woff",
+    }
+
+    local_files = {}
+    for f in local_dir.rglob("*"):
+        if f.is_file():
+            s3_key = prefix + f.relative_to(local_dir).as_posix()
+            local_files[s3_key] = f
+
+    for s3_key, local_path in local_files.items():
+        content_type = CONTENT_TYPES.get(local_path.suffix.lower(), "application/octet-stream")
+        if local_path.name == "index.html":
+            cache = "no-cache, no-store, must-revalidate"
+        elif "/assets/" in s3_key:
+            cache = "public, max-age=31536000, immutable"
+        else:
+            cache = "public, max-age=86400"
+
+        s3_client.upload_file(
+            Filename=str(local_path), Bucket=bucket, Key=s3_key,
+            ExtraArgs={"ContentType": content_type, "CacheControl": cache},
+        )
+        logger.info(f"    Uploaded: {s3_key}")
+
+    # Delete orphans (sync --delete)
+    paginator = s3_client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"] not in local_files:
+                s3_client.delete_object(Bucket=bucket, Key=obj["Key"])
+                logger.info(f"    Deleted (orphan): {obj['Key']}")
+
+    logger.info(f"  ✅ S3 sync complete ({len(local_files)} files)")
+
+
+def _get_or_create_oac(cf_client) -> str:
+    """Get or create a CloudFront Origin Access Control for the S3 bucket."""
+    oac_name = f"OAC-{S3_BUCKET}"
+    try:
+        resp = cf_client.create_origin_access_control(
+            OriginAccessControlConfig={
+                "Name": oac_name,
+                "Description": "OAC for supplychain-copilot dashboard",
+                "SigningProtocol": "sigv4",
+                "SigningBehavior": "always",
+                "OriginAccessControlOriginType": "s3",
+            }
+        )
+        oac_id = resp["OriginAccessControl"]["Id"]
+        logger.info(f"  ✅ OAC created: {oac_id}")
+        return oac_id
+    except ClientError as e:
+        if "OriginAccessControlAlreadyExists" in str(e):
+            items = cf_client.list_origin_access_controls()["OriginAccessControlList"]["Items"]
+            for item in items:
+                if item["Name"] == oac_name:
+                    logger.info(f"  ℹ️  Reusing existing OAC: {item['Id']}")
+                    return item["Id"]
+        raise
+
+
+def _attach_s3_policy_for_oac(s3_client, distribution_arn: str):
+    """Add/update S3 bucket policy to allow CloudFront OAC read access."""
+    new_stmt = {
+        "Sid": "AllowCloudFrontServicePrincipal",
+        "Effect": "Allow",
+        "Principal": {"Service": "cloudfront.amazonaws.com"},
+        "Action": "s3:GetObject",
+        "Resource": f"arn:aws:s3:::{S3_BUCKET}/*",
+        "Condition": {"StringEquals": {"AWS:SourceArn": distribution_arn}},
+    }
+    try:
+        existing = s3_client.get_bucket_policy(Bucket=S3_BUCKET)
+        policy = json.loads(existing["Policy"])
+    except ClientError as e:
+        if "NoSuchBucketPolicy" in str(e):
+            policy = {"Version": "2012-10-17", "Statement": []}
+        else:
+            raise
+    # Replace existing CF statement if present, then append
+    policy["Statement"] = [s for s in policy["Statement"] if s.get("Sid") != "AllowCloudFrontServicePrincipal"]
+    policy["Statement"].append(new_stmt)
+    s3_client.put_bucket_policy(Bucket=S3_BUCKET, Policy=json.dumps(policy))
+    logger.info("  ✅ S3 bucket policy updated for CloudFront OAC")
+
+
+def _create_cloudfront_distribution(cf_client, oac_id: str) -> tuple:
+    """Create CloudFront distribution with S3 origin at /dashboard, returns (dist_id, domain)."""
+    origin_id = f"S3-{S3_BUCKET}-dashboard"
+    resp = cf_client.create_distribution(
+        DistributionConfig={
+            "CallerReference": f"scm-dashboard-{int(time.time())}",
+            "Comment": CLOUDFRONT_COMMENT,
+            "DefaultRootObject": "index.html",
+            "Enabled": True,
+            "HttpVersion": "http2and3",
+            "PriceClass": "PriceClass_100",
+            "Origins": {
+                "Quantity": 1,
+                "Items": [{
+                    "Id": origin_id,
+                    "DomainName": f"{S3_BUCKET}.s3.{REGION}.amazonaws.com",
+                    "OriginPath": "/dashboard",
+                    "S3OriginConfig": {"OriginAccessIdentity": ""},
+                    "OriginAccessControlId": oac_id,
+                }],
+            },
+            "DefaultCacheBehavior": {
+                "TargetOriginId": origin_id,
+                "ViewerProtocolPolicy": "redirect-to-https",
+                "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",  # CachingOptimized
+                "Compress": True,
+                "AllowedMethods": {
+                    "Quantity": 2, "Items": ["GET", "HEAD"],
+                    "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+                },
+            },
+            "CustomErrorResponses": {
+                "Quantity": 2,
+                "Items": [
+                    {"ErrorCode": 403, "ResponsePagePath": "/index.html", "ResponseCode": "200", "ErrorCachingMinTTL": 0},
+                    {"ErrorCode": 404, "ResponsePagePath": "/index.html", "ResponseCode": "200", "ErrorCachingMinTTL": 0},
+                ],
+            },
+        }
+    )
+    dist = resp["Distribution"]
+    return dist["Id"], dist["DomainName"], dist["ARN"]
+
+
+def deploy_dashboard(clients, state, dry_run=False):
+    """Build the Vite/React dashboard and deploy to S3 + CloudFront."""
+    logger.info("=" * 60)
+    logger.info("STEP 8: Building and Deploying React Dashboard")
+
+    dashboard_dir = PROJECT_ROOT / "dashboard"
+    dist_dir = PROJECT_ROOT / DASHBOARD_DIST_DIR
+
+    # 1. Build
+    logger.info("  Building dashboard (npm run build)...")
+    if not dry_run:
+        result = subprocess.run("npm run build", cwd=str(dashboard_dir), shell=True)
+        if result.returncode != 0:
+            logger.error("  ❌ npm run build failed")
+            return False
+        logger.info("  ✅ Build succeeded")
+    else:
+        logger.info("  [DRY RUN] Would run: npm run build")
+
+    # 2. S3 sync
+    logger.info(f"  Syncing dist/ → s3://{S3_BUCKET}/{DASHBOARD_S3_PREFIX} ...")
+    if not dry_run:
+        _s3_sync(clients["s3"], dist_dir, S3_BUCKET, DASHBOARD_S3_PREFIX)
+
+    # 3. CloudFront — create or reuse
+    cf = clients["cloudfront"]
+    existing = state.get("cloudfront", {})
+    distribution_id = existing.get("distribution_id")
+    cf_domain = existing.get("url")
+
+    if distribution_id:
+        logger.info(f"  ℹ️  Reusing CloudFront distribution: {distribution_id}")
+    else:
+        if dry_run:
+            logger.info("  [DRY RUN] Would create CloudFront distribution")
+            return True
+
+        logger.info("  Creating CloudFront distribution...")
+        oac_id = _get_or_create_oac(cf)
+        distribution_id, cf_domain, dist_arn = _create_cloudfront_distribution(cf, oac_id)
+        _attach_s3_policy_for_oac(clients["s3"], dist_arn)
+
+        state.setdefault("cloudfront", {})
+        state["cloudfront"]["distribution_id"] = distribution_id
+        state["cloudfront"]["url"] = cf_domain
+        save_state(state)
+        logger.info(f"  ✅ CloudFront distribution created: {distribution_id}")
+        logger.info(f"     URL: https://{cf_domain}")
+        logger.info("  ⏳ Note: CloudFront takes ~5-10 min to propagate globally")
+
+    # 4. Invalidation
+    if not dry_run:
+        try:
+            inv = cf.create_invalidation(
+                DistributionId=distribution_id,
+                InvalidationBatch={"Paths": {"Quantity": 1, "Items": ["/*"]}, "CallerReference": str(int(time.time()))},
+            )
+            logger.info(f"  ✅ Invalidation created: {inv['Invalidation']['Id']}")
+        except ClientError as e:
+            logger.warning(f"  ⚠️  Invalidation failed (deploy still succeeded): {e}")
+
+    logger.info(f"\n  ✅ DASHBOARD DEPLOYED")
+    logger.info(f"     S3 path : s3://{S3_BUCKET}/{DASHBOARD_S3_PREFIX}")
+    logger.info(f"     CF URL  : https://{cf_domain}")
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1000,6 +1212,13 @@ def print_summary(state):
         print("\n[API GATEWAY]")
         print(f"   URL: {api.get('url', 'N/A')}")
 
+    # CloudFront
+    cf = state.get("cloudfront", {})
+    if cf:
+        print("\n[DASHBOARD (CloudFront)]")
+        print(f"   URL             : https://{cf.get('url', 'N/A')}")
+        print(f"   Distribution ID : {cf.get('distribution_id', 'N/A')}")
+
     # Test command
     sup = state.get("agents", {}).get("supervisor", {})
     if sup.get("agent_id") and sup.get("alias_id"):
@@ -1014,7 +1233,7 @@ def print_summary(state):
 def main():
     parser = argparse.ArgumentParser(description="SupplyChain Copilot Infrastructure Setup")
     parser.add_argument("--step", choices=["upload_db", "log_groups", "lambdas", "agents", "api",
-                                          "function_url", "code_interpreter", "all"],
+                                          "function_url", "code_interpreter", "deploy_dashboard", "all"],
                         default="all", help="Which step to run")
     parser.add_argument("--dry-run", action="store_true", help="Print plan without executing")
     args = parser.parse_args()
@@ -1045,6 +1264,9 @@ def main():
 
     if args.step in ("all", "code_interpreter"):
         enable_code_interpreter(clients, state, args.dry_run)
+
+    if args.step == "deploy_dashboard":     # not in "all" — explicit manual step
+        deploy_dashboard(clients, state, args.dry_run)
 
     if args.step == "all":
         print_summary(state)

@@ -14,7 +14,7 @@ const initConversation = () => ({
     messages: [
         {
             role: "assistant",
-            text: "Namaste! 🙏 I'm your SupplyChain Copilot. I can help with dealer briefings, visit planning, commitment tracking, and demand forecasting. How can I help?",
+            text: "Namaste! 🙏 I'm your SupplyChain Copilot. I can help you with team performance analytics, dealer network health, at-risk dealer reviews, commitment pipeline tracking, revenue insights, and demand forecasting. How can I help?",
             time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
             agent: "Supervisor",
         },
@@ -37,9 +37,11 @@ export default function ChatTab() {
         setConversations(prev => [c, ...prev]);
         setActiveId(c.id);
         setInput("");
+        setSuggestionsOpen(true);
     };
 
     const [typingStatus, setTypingStatus] = useState("");
+    const [suggestionsOpen, setSuggestionsOpen] = useState(true);
 
     const sendChat = useCallback(async () => {
         if (!input.trim() || typing) return;
@@ -59,6 +61,7 @@ export default function ChatTab() {
         setInput("");
         setTyping(true);
         setTypingStatus("Thinking...");
+        setSuggestionsOpen(false);
 
         const sessionId = String(convId);
 
@@ -253,15 +256,28 @@ export default function ChatTab() {
                     </div>
                 </div>
 
-                {/* Suggestion chips — only on fresh conversation */}
-                {msgs.length <= 1 && (
-                    <div style={{ padding: "0 32px 10px", maxWidth: 812, margin: "0 auto", width: "100%", display: "flex", flexWrap: "wrap", gap: 7 }}>
-                        {CHAT_SUGGESTIONS.map((s, i) => (
-                            <button key={i} onClick={() => setInput(s)} style={{ padding: "7px 13px", borderRadius: 10, background: "#fff", border: "1px solid " + T.cardBorder, color: T.textMuted, fontSize: 11.5, cursor: "pointer", transition: "all .2s", fontFamily: "inherit" }}
-                                onMouseEnter={e => { e.target.style.borderColor = "#c7c8f2"; e.target.style.color = T.primary; e.target.style.background = T.primarySoft; }}
-                                onMouseLeave={e => { e.target.style.borderColor = T.cardBorder; e.target.style.color = T.textMuted; e.target.style.background = "#fff"; }}
-                            >{s}</button>
-                        ))}
+                {/* Suggestion chips — collapsible, shown after every assistant response */}
+                {!typing && msgs.length > 0 && msgs[msgs.length - 1].role === "assistant" && (
+                    <div style={{ padding: "0 32px 10px", maxWidth: 812, margin: "0 auto", width: "100%" }}>
+                        <button onClick={() => setSuggestionsOpen(o => !o)} style={{
+                            display: "flex", alignItems: "center", gap: 5, background: "none", border: "none",
+                            cursor: "pointer", color: T.textMuted, fontSize: 11, fontWeight: 600, padding: "2px 0 6px",
+                            fontFamily: "inherit",
+                        }}>
+                            <Sparkles size={11} color={T.primary} />
+                            Suggested questions
+                            <ChevronRight size={12} style={{ transform: suggestionsOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .2s" }} />
+                        </button>
+                        {suggestionsOpen && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                                {CHAT_SUGGESTIONS.map((s, i) => (
+                                    <button key={i} onClick={() => setInput(s)} style={{ padding: "7px 13px", borderRadius: 10, background: "#fff", border: "1px solid " + T.cardBorder, color: T.textMuted, fontSize: 11.5, cursor: "pointer", transition: "all .2s", fontFamily: "inherit" }}
+                                        onMouseEnter={e => { e.target.style.borderColor = "#c7c8f2"; e.target.style.color = T.primary; e.target.style.background = T.primarySoft; }}
+                                        onMouseLeave={e => { e.target.style.borderColor = T.cardBorder; e.target.style.color = T.textMuted; e.target.style.background = "#fff"; }}
+                                    >{s}</button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
 
