@@ -2,11 +2,15 @@
 
 ## Introduction
 
-The Retail SupplyChain Copilot is an AI-powered assistant designed specifically for Indian MSMEs (Micro, Small, and Medium Enterprises) in the B2B distribution and retail supply chain sector. Unlike large enterprises that use sophisticated ERP systems like SAP or Salesforce, Indian MSMEs typically operate using WhatsApp groups, Excel spreadsheets, and paper notebooks. Field intelligence from sales representatives—such as dealer commitments like "Sharma ji will order 500 units next week"—remains trapped in informal conversations and never reaches business planning.
+**SupplyChain Copilot** is an AI-powered sales and production intelligence system designed specifically for Indian MSMEs in B2B distribution (CleanMax brand, detergent distribution, Delhi NCR).
 
-The system captures sales visit data through natural language conversations on Telegram, automatically extracts dealer commitments, and combines them with transactional history to provide actionable intelligence. Multiple specialized AI agents work together to help sales representatives prepare for dealer visits, plan their day efficiently, and give business owners visibility into their sales pipeline without requiring complex software training.
+**Problem**: 63 million Indian MSMEs run sales operations on WhatsApp groups, paper notebooks, and Excel spreadsheets. Field intelligence (dealer commitments like "Sharma ji will order 500 units next week") stays trapped in informal conversations and never reaches business planning.
 
-The platform is designed for accessibility: it works on basic smartphones, requires no training (conversational interface), and integrates with tools Indian MSMEs already use (Telegram/WhatsApp).
+**Solution**: Natural language AI copilot accessible via Telegram (for sales reps) and React dashboard (for managers). Multi-agent system extracts commitments from conversations, tracks fulfillment, and provides actionable intelligence without requiring complex software training.
+
+**Status**: ✅ **FULLY IMPLEMENTED & DEPLOYED** (February 2026)
+
+The system is live on AWS with full PostgreSQL integration, Bedrock Multi-Agent orchestration, and CloudFront-hosted React dashboard. Sales representatives interact via Telegram bot (@CleanMaxSCMBot), while managers access real-time intelligence through the web dashboard.
 
 ## Problem Statement
 
@@ -90,12 +94,13 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 ### Core System Components
 
 - **SupplyChain_Copilot**: The complete AI system including Telegram bot, agent orchestration, and dashboard
-- **Telegram_Bot**: The primary user interface for sales representatives to interact with the system
-- **Supervisor_Agent**: The routing agent that receives user queries and directs them to appropriate specialized agents
-- **Visit_Capture_Agent**: The agent that extracts structured information from natural language visit notes
-- **Dealer_Intelligence_Agent**: The agent that provides information about dealers, payments, orders, and health scores
-- **Order_Planning_Agent**: The agent that handles order processing, inventory checks, and commitment fulfillment tracking
-- **Manager_Dashboard**: Web interface (React.js) for sales managers to view team and dealer metrics, forecast consumption, and alerts
+- **Telegram_Bot**: The primary user interface for sales representatives (@CleanMaxSCMBot on Telegram)
+- **Supervisor_Agent**: AWS Bedrock routing agent (CS4Z87AWWT) that receives user queries and directs them to appropriate specialized agents
+- **Visit_Capture_Agent**: AWS Bedrock agent (JCIET1JRAW) that extracts structured information from natural language visit notes
+- **Dealer_Intelligence_Agent**: AWS Bedrock agent (HSJZG25AZJ) that provides information about dealers, payments, orders, and health scores
+- **Order_Planning_Agent**: AWS Bedrock agent (2BHUYFEBG1) that handles order processing, inventory checks, and commitment fulfillment tracking
+- **Manager_Analytics_Agent**: AWS Bedrock agent (PR3VSGBPTC) that provides company-wide analytics, at-risk dealers, and production demand/supply gap analysis
+- **Manager_Dashboard**: React.js web interface (CloudFront-hosted) for sales managers to view team and dealer metrics, forecast consumption, and alerts
 
 ### Business Entities
 
@@ -120,27 +125,31 @@ The platform is designed for accessibility: it works on basic smartphones, requi
 
 ## Data Sources
 
-### Structured Data (Initial Load)
+### Structured Data (PostgreSQL RDS)
 
-For the hackathon, synthetic data will be generated to simulate a typical MSME distributor.
+The system uses PostgreSQL RDS as the primary database with synthetic data representing a typical MSME distributor.
 
-| Data Type | Description | Format |
-|-----------|-------------|--------|
-| Dealer Master | Dealer profiles, locations, credit limits | CSV/SQLite |
-| Product Master | Product catalog, categories, prices | CSV/SQLite |
-| Sales Rep Master | Sales team information | CSV/SQLite |
-| Territory Master | Geographic assignments | CSV/SQLite |
-| Historical Orders | Past 6 months of orders | CSV/SQLite |
-| Historical Invoices | Invoice records with amounts | CSV/SQLite |
-| Historical Payments | Payment records | CSV/SQLite |
-| Inventory Levels | Current stock by product | CSV/SQLite |
+| Data Type | Description | Storage |
+|-----------|-------------|---------|
+| Dealer Master | Dealer profiles, locations, credit limits | PostgreSQL RDS |
+| Product Master | Product catalog (3 SKUs: CLN-500G, CLN-1KG, CLN-2KG) | PostgreSQL RDS |
+| Sales Rep Master | Sales team information with Telegram integration | PostgreSQL RDS |
+| Territory Master | Geographic assignments (Delhi NCR) | PostgreSQL RDS |
+| Historical Orders | Past 6 months of orders | PostgreSQL RDS |
+| Historical Invoices | Invoice records with amounts | PostgreSQL RDS |
+| Historical Payments | Payment records | PostgreSQL RDS |
+| Inventory Levels | Current stock by product and warehouse | PostgreSQL RDS |
+| Production Schedule | Manufacturing batches and capacity | PostgreSQL RDS |
+| Dealer Health Scores | Time-series health metrics | PostgreSQL RDS |
+| Alerts | System-generated notifications | PostgreSQL RDS |
+| Sessions | Telegram and web chat sessions | PostgreSQL RDS |
 
 ### Unstructured Data (Real-time Capture)
 
 | Source | Data Type | Input Method |
 |--------|-----------|--------------|
 | Visit Notes | Natural language visit summaries | Telegram chat |
-| Commitments | Dealer promises extracted from notes | AI extraction |
+| Commitments | Dealer promises extracted from notes | AI extraction via Visit Capture Agent |
 | Follow-ups | Next actions identified from conversation | AI extraction |
 
 ## Requirements
@@ -198,29 +207,33 @@ For the hackathon, synthetic data will be generated to simulate a typical MSME d
 
 ### Requirement 5: Manager Dashboard with Forecast Consumption
 
-**User Story:** As a sales manager, I want to see my team's performance, dealer pipeline, and forecast consumption on a dashboard, so that I can monitor operations and plan inventory.
+**User Story:** As a sales manager, I want to see my team's performance, dealer pipeline, forecast consumption, and production intelligence on a dashboard, so that I can monitor operations and plan inventory.
 
 #### Acceptance Criteria
 
-1. WHEN a manager accesses the dashboard, THE Manager_Dashboard SHALL display: commitment pipeline (all pending commitments with status), at-risk dealers list (declining orders, overdue payments), team performance summary, collection status, and forecast consumption view
-2. WHEN displaying commitment pipeline, THE Manager_Dashboard SHALL show dealer name, product, quantity, expected date, and status (new/due soon/overdue/consumed)
-3. WHEN displaying at-risk dealers, THE Manager_Dashboard SHALL show dealer name, risk indicators, and assigned sales rep
-4. WHEN a manager needs to drill down, THE Manager_Dashboard SHALL allow filtering by sales rep, territory, or time period
+1. WHEN a manager accesses the dashboard at https://d2glf02xctjq6v.cloudfront.net, THE Manager_Dashboard SHALL display: Sales Tab with revenue metrics, commitment pipeline, at-risk dealers, team performance, and recent activity; Production Tab with production metrics, demand vs supply gap, inventory health, and daily production charts
+2. WHEN displaying commitment pipeline, THE Manager_Dashboard SHALL show dealer name, product, quantity, expected date, and status (PENDING/PARTIAL/CONVERTED/MISSED)
+3. WHEN displaying at-risk dealers, THE Manager_Dashboard SHALL show dealer name, health status, risk indicators, and assigned sales rep
+4. WHEN a manager needs to drill down, THE Manager_Dashboard SHALL allow filtering by month, territory, and dealer category
 5. WHEN displaying forecast consumption, THE Manager_Dashboard SHALL show committed quantities vs actual orders received, with backward and forward consumption windows
 6. WHEN commitment conversion rate drops below threshold, THE Manager_Dashboard SHALL highlight this for attention
-7. The dashboard should have an Interactive map using which user can drill down. the map will have dealers and warehouse placed with their own separate icons. status level of different dealers will be shown on the map with appropriate colours: green, amber or red.
+7. WHEN displaying production intelligence, THE Manager_Dashboard SHALL show demand vs supply gap with 8-week forecast horizon, identifying potential shortfalls
+8. WHEN displaying the dealer map, THE Manager_Dashboard SHALL use Leaflet with OpenStreetMap tiles, showing dealers with color-coded health status (green/amber/red) and warehouse locations
+9. WHEN a manager uses the AI Copilot chat panel, THE Manager_Dashboard SHALL route queries to the Supervisor Agent and display responses with session persistence (7-day expiry)
 
-### Requirement 6: Manager Alerts and Approvals
+### Requirement 6: Manager Alerts and Telegram Integration
 
-**User Story:** As a sales manager, I want to receive alerts for critical situations and be able to approve discount requests, so that I can intervene when necessary.
+**User Story:** As a sales manager, I want to receive alerts for critical situations via Telegram and be able to query the system, so that I can intervene when necessary.
 
 #### Acceptance Criteria
 
-1. WHEN a dealer becomes at-risk (health score drops below 50), THE SupplyChain_Copilot SHALL generate an alert for the assigned manager
-2. WHEN a sales rep's performance metrics fall below threshold, THE SupplyChain_Copilot SHALL generate an alert for the manager
-3. WHEN a discount request exceeds sales rep's authority level, THE Order_Planning_Agent SHALL route approval request to the manager
-4. WHEN a manager receives an approval request, manager will approve/reject the request through the telegram bot.
-5. WHEN manager takes action on an alert, THE SupplyChain_Copilot SHALL log the action and notify relevant parties.
+1. WHEN a dealer becomes at-risk (health score drops below 50), THE Order_Planning_Agent SHALL generate an alert and send notification to manager's Telegram chat
+2. WHEN a commitment due date passes without order, THE Order_Planning_Agent SHALL generate a missed commitment alert for the manager
+3. WHEN a discount request exceeds sales rep's authority level (>3%), THE Order_Planning_Agent SHALL route approval request to the manager via Telegram
+4. WHEN a dealer complaint is logged by a sales rep, THE Visit_Capture_Agent SHALL generate a high-priority alert and notify the manager immediately via Telegram
+5. WHEN a manager receives an alert via Telegram, THE alert SHALL include dealer name, issue description, assigned sales rep, and recommended action
+6. WHEN a manager queries the system via Telegram, THE Supervisor_Agent SHALL route to Manager_Analytics_Agent for company-wide queries (team overview, at-risk dealers, production demand/supply)
+7. WHEN manager takes action on an alert, THE SupplyChain_Copilot SHALL log the action and update alert status to RESOLVED or DISMISSED
 
 ### Requirement 7: Order Planning and Commitment Fulfillment
 
@@ -247,18 +260,22 @@ For the hackathon, synthetic data will be generated to simulate a typical MSME d
 4. WHEN a query cannot be processed, THE SupplyChain_Copilot SHALL provide helpful suggestions (e.g., "I can help you with dealer info, visit logging, or planning. What would you like?")
 5. WHEN processing queries, THE SupplyChain_Copilot SHALL handle common variations and Hinglish phrases (e.g., "payment status" = "payment kya hai" = "kitna baaki hai")
 
-### Requirement 9: Telegram Bot Interface
+### Requirement 9: Telegram Bot Interface with Registration
 
-**User Story:** As a sales representative, I want to interact with the system through Telegram, so that I can use a familiar interface on my existing phone.
+**User Story:** As a sales representative or manager, I want to interact with the system through Telegram with automatic registration, so that I can use a familiar interface on my existing phone.
 
 #### Acceptance Criteria
 
-1. WHEN a user starts the bot, THE Telegram_Bot SHALL display a welcome message with example messages for different situations and button for Check Status.
-2. WHEN a user types a question, THE Telegram_Bot SHALL route to the supervisor agent through API.
-3. WHEN presenting information, THE Telegram_Bot SHALL use Telegram-compatible formatting (bold, italic, emojis, inline keyboards)
-4. WHEN confirmation is needed, THE Telegram_Bot SHALL present inline buttons (e.g., [✓ Save] [✏️ Edit] [❌ Cancel])
-5. WHEN the user sends free text instead of tapping buttons, THE Telegram_Bot SHALL process it as a natural language query
-6. WHEN the system is processing, THE Telegram_Bot SHALL show appropriate feedback (typing indicator or progress message)
+1. WHEN a user starts the bot with `/start` command, THE Telegram_Bot SHALL check if user is registered and display appropriate welcome message
+2. WHEN an unregistered user sends `/start`, THE Telegram_Bot SHALL prompt for Employee Code (e.g., EMP002) and auto-register via `register_telegram_user()` function
+3. WHEN a registered user types a question, THE Telegram_Bot SHALL route to the Supervisor Agent through Lambda webhook (scm-telegram-webhook)
+4. WHEN presenting information, THE Telegram_Bot SHALL use Telegram MarkdownV2 formatting (bold, italic, emojis, tables) via `telegramify-markdown` library
+5. WHEN confirmation is needed, THE Telegram_Bot SHALL present inline buttons (e.g., [✓ Save] [✏️ Edit] [❌ Cancel])
+6. WHEN the user sends free text instead of tapping buttons, THE Telegram_Bot SHALL process it as a natural language query
+7. WHEN the system is processing a Bedrock query, THE Telegram_Bot SHALL use async self-invocation pattern (fire-and-forget) to avoid Telegram's 60s webhook timeout
+8. WHEN handling webhook requests, THE Telegram_Bot SHALL verify HMAC secret token via `X-Telegram-Bot-Api-Secret-Token` header
+9. WHEN processing messages, THE Telegram_Bot SHALL implement deduplication using `update_id` stored in session context to skip retries
+10. WHEN a sales rep query needs user identification, THE Supervisor_Agent SHALL first call `get_sales_rep` with `telegram_user_id` to resolve `sales_person_id`
 
 ### Requirement 10: Data Validation and Error Handling
 
@@ -272,90 +289,88 @@ For the hackathon, synthetic data will be generated to simulate a typical MSME d
 4. WHEN extracted data contains inconsistencies (e.g., commitment quantity exceeds typical order), THE Visit_Capture_Agent SHALL flag for user confirmation
 5. WHEN synthetic data is loaded, THE Data_Pipeline SHALL validate referential integrity across all tables
 
-## Data Scale (Hackathon Scope)
+## Data Scale (Production Deployment)
 
-For the hackathon demonstration, the system will use synthetic data at the following scale:
+The system is deployed with synthetic data at the following scale:
 
 | Entity | Count | Notes |
 |--------|-------|-------|
-| Dealers | 50-80 | Distributed across 3-4 territories |
-| Products | 20-30 | Across 4-5 categories |
-| Sales Reps | 5-8 | Each assigned to 1-2 territories |
-| Territories | 3-4 | Geographic regions |
-| Historical Orders | 500-800 | 6 months of order history |
-| Historical Visits | 300-500 | Visit records with notes |
-| Commitments | 50-100 | Mix of fulfilled, pending, and missed |
-| Inventory Records | 20-30 | Current stock by product |
+| Dealers | 45 | Distributed across Delhi NCR territories |
+| Products | 3 | CLN-500G, CLN-1KG, CLN-2KG (CleanMax Detergent) |
+| Sales Reps | 5 | Each assigned to territories via territory_assignments |
+| Territories | 4 | Delhi NCR regions |
+| Historical Orders | ~800 | 6 months of order history (2025-03-28 to 2026-03-05) |
+| Historical Visits | ~500 | Visit records with natural language notes |
+| Commitments | ~100 | Mix of PENDING, PARTIAL, CONVERTED, and MISSED |
+| Inventory Records | 30+ | Current stock by product and warehouse |
+| Production Batches | ~200 | Historical and scheduled production |
+| Dealer Health Scores | ~8,700 | Time-series health metrics (daily per dealer) |
+| Total Database Records | ~8,700 | Across 30+ PostgreSQL tables |
 
 ## Scope Definition
 
-### MVP Scope (Hackathon Build)
+### Fully Implemented Features (February 2026)
 
-The following features are included in the MVP build:
+The following features are fully implemented and deployed on AWS:
 
 **Core Features:**
-- Natural language visit capture via Telegram
-- Dealer briefing and intelligence
-- Smart visit planning
-- Sales rep dashboard (Telegram)
-- Manager dashboard (React.js web app)
-- Commitment tracking with forecast consumption
-- Manager alerts for at-risk situations
-- Order-commitment matching (basic ATP)
+- Natural language visit capture via Telegram with entity resolution and commitment extraction
+- Dealer briefing and intelligence with health scores and payment status
+- Smart visit planning with prioritized dealer recommendations
+- Sales rep dashboard (Telegram) with performance metrics and alerts
+- Manager dashboard (React.js web app at https://d2glf02xctjq6v.cloudfront.net)
+- Commitment tracking with forecast consumption (backward/forward logic)
+- Manager alerts via Telegram for at-risk situations and complaints
+- Order-commitment matching with ATP (Available-to-Promise) inventory checks
+- Production intelligence with demand vs supply gap analysis (8-week forecast)
+- Interactive dealer map with Leaflet and OpenStreetMap
+- AI Copilot chat panel on dashboard with session persistence
+- Telegram bot registration flow with Employee Code lookup
+- Async webhook pattern to handle Telegram's 60s timeout
 
-**Agents:**
-- Supervisor Agent (intent classification and routing)
-- Visit Capture Agent (NL extraction and entity resolution)
-- Dealer Intelligence Agent (profiles, payments, health scores, visit planning)
-- Order Planning Agent (commitment fulfillment, basic inventory check)
+**AWS Bedrock Agents (4 Collaborators + 1 Supervisor):**
+- Supervisor Agent (CS4Z87AWWT) - Intent classification and routing with Code Interpreter
+- Visit Capture Agent (JCIET1JRAW) - NL extraction, entity resolution, commitment creation
+- Dealer Intelligence Agent (HSJZG25AZJ) - Profiles, payments, health scores, visit planning, get_sales_rep
+- Order Planning Agent (2BHUYFEBG1) - Commitment fulfillment, inventory checks, alerts, forecast consumption
+- Manager Analytics Agent (PR3VSGBPTC) - Team overview, at-risk dealers, commitment pipeline, production demand/supply
 
-### Full Vision (Idea Submission)
+**Lambda Functions (7 total):**
+- scm-telegram-webhook (120s timeout) - Telegram webhook with fast/slow path split
+- scm-dashboard-api (29s) - 11 REST endpoints for dashboard
+- scm-dealer-actions (29s) - 8 tools for Dealer Intelligence Agent
+- scm-visit-actions (29s) - 4 tools for Visit Capture Agent
+- scm-order-actions (29s) - 6 tools for Order Planning Agent
+- scm-analytics-actions (29s) - 5 tools for Manager Analytics Agent
+- scm-forecast (29s) - Demand forecast model (pickle-based)
 
-The following features are included in the full vision for judges but may not be fully implemented:
+**Infrastructure:**
+- PostgreSQL RDS (scm-postgres.c2na6oc62pb7.us-east-1.rds.amazonaws.com)
+- API Gateway (jn5xaobcs6.execute-api.us-east-1.amazonaws.com/prod)
+- CloudFront distribution (d2glf02xctjq6v.cloudfront.net) for React dashboard
+- S3 bucket for Lambda deployment packages and dashboard static files
+- Telegram webhook (Function URL: gcquxmfbpd7lbty3m4jp7cki6m0xaubd.lambda-url.us-east-1.on.aws/)
+- AWS Bedrock inference profile (us.anthropic.claude-sonnet-4-6)
 
-**Advanced Order Planning:**
-- Full ATP (Available-to-Promise) and CTP (Capable-to-Promise) capabilities
-- Order splitting when capacity is constrained
-- Backorder management
-- Delivery scheduling optimization
+### Future Enhancements (Post-Deployment)
 
-**Logistics Optimization (Drop Sales):**
-- Identify delivery vans with spare capacity
-- Suggest nearby dealers who might need stock
-- Route optimization for drop sales
-- Real-time van tracking integration
-
-**Advanced Manager Features:**
-- Discount approval workflow with configurable thresholds
-- Sales rep performance coaching recommendations
-- Territory rebalancing suggestions
-- Predictive alerts using ML
-
-### Out of Scope for Hackathon
-
-**Future Enhancements (Post-Hackathon):**
-- WhatsApp Business API integration (currently using Telegram for ease of development)
+**Near-Term (3 months):**
+- WhatsApp Business API integration (currently Telegram)
 - Voice input and transcription for visit notes
-- Regional language support (Hindi, Tamil, etc.) beyond basic Hinglish
+- Photo capture (shelf images, competitor products, visit selfies)
+- GPS tracking of visits with geofencing
+- Push notifications for visit reminders
+
+**Long-Term (6-12 months):**
+- Advanced demand forecasting with ML (replace pickle model)
+- Product recommendation engine based on dealer category
+- Route optimization for visit planning (TSP solver)
+- Drop sales optimization (identify vans with spare capacity)
 - Offline mode with sync capability
-- Push notifications for reminders and alerts
-- Advanced demand forecasting with ML models
-- Product recommendation engine
-- Route optimization for visit planning
-- Photo capture (shelf images, competitor products)
-- GPS tracking of visits
 
-**Enterprise Features (Not Target Market):**
-- Integration with external ERP/CRM systems via live APIs
+**Enterprise Features (Future Market Expansion):**
+- Multi-tenant architecture (separate data per company)
+- Role-based access control (sales head, regional manager)
 - GST compliance and invoice validation
-- Multi-company/multi-tenant architecture
-- Role-based access control beyond manager/rep
+- Integration with external ERP/CRM via APIs
 - Audit trails and compliance reporting
-- Custom report generation with PDF export
-
-**Dealer-Side Features (Future Extension):**
-- Dealer self-service portal
-- Inventory tracking for dealers
-- Automated reorder recommendations
-- Payment gateway integration
-- Order placement via chatbot

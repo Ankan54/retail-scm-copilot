@@ -467,10 +467,14 @@ def get_recent_activity(month=None):
             WHERE v.visit_date >= %s AND v.visit_date <= %s
             ORDER BY v.visit_date DESC LIMIT 4
         """, (cs, ce)):
+            detail = r["detail"] or "Visit completed"
+            # Truncate long notes to prevent UI alignment issues (max 100 chars)
+            if len(detail) > 100:
+                detail = detail[:97] + "..."
             activities.append({
                 "type": "visit", "icon": "visit",
                 "text":   f"{r['rep']} visited {r['dealer']}",
-                "detail": r["detail"] or "Visit completed",
+                "detail": detail,
                 "time":   str(r["ts"]),
             })
 

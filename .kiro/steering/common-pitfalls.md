@@ -310,3 +310,45 @@ for root, dirs, files in os.walk(source_dir):
 ```
 
 **Rule**: Always test Lambda locally with the actual zip contents before deploying.
+
+
+## Telegram Integration Issues
+
+### Webhook Timeout
+
+**Problem**: Telegram has 60s webhook timeout. Bedrock calls take 50-60s. If Lambda processes synchronously, Telegram retries and user gets duplicate responses.
+
+**Solution**: Async self-invocation pattern (implemented in `lambdas/telegram_webhook/handler.py`):
+1. Validate webhook secret token (X-Telegram-Bot-Api-Secret-Token header)
+2. Try **fast path first** (`_handle_telegram_fast`) — /start, registration (no Bedrock, instant response)
+3. If needs Bedrock → fire-and-forget async (`InvocationType='Event'`), return 200 immediately
+4. Async handler (`_handle_telegram_bedrock`) processes Bedrock query
+5. **Deduplication**: Store `update_id` in session context, skip if already processed (Lambda Event retries up to 2x on failure)
+6. **Markdown Formatting**: `telegramify-markdown` library converts AI output (`**bold**`, tables, lists) → Telegram MarkdownV2
+7. **Session Persistence**: `sessions` table (24-hour expiry for Telegram, 7-day for web)
+
+**Lambda Function URL**: https://gcquxmfbpd7lbty3m4jp7cki6m0xaubd.lambda-url.us-east-1.on.aws/
+**Timeout**: 120s (allows async invocation to complete)
+
+### 502 Errors from Supervisor
+
+**Problem**: Supervisor using Code Interpreter before routing + calling multiple agents → hits Lambda timeout → 502.
+
+**Fix**:
+1. Lambda timeout ≥ 120s (set in config.py)
+2. Supervisor instructions: **DO NOT use Code Interpreter before routing** — route first, calculate from returned data if needed
+3. Clear single-agent routing rules per query type (never route to both Manager_Analytics + Order_Planning)
+
+### Markdown Formatting Errors
+
+**Problem**: Telegram rejects messages with invalid MarkdownV2 syntax (unescaped special characters).
+
+**Cause**: Agent output contains special characters (_, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !) that need escaping in MarkdownV2.
+
+**Solution**: Use `telegramify-markdown` library to convert standard markdown to Telegram MarkdownV2:
+```python
+from telegramify_markdown import markdownify
+formatted_text = markdownify(agent_response)
+```
+
+**Rule**: Always use `telegramify-markdown` for agent responses sent to Telegram. Never send raw markdown.

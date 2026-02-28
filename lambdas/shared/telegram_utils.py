@@ -83,10 +83,11 @@ def send_message(chat_id: str | int, text: str, parse_mode: str = "MarkdownV2") 
     """
     if not text:
         return False
-    if _TELEGRAMIFY_AVAILABLE:
+    if parse_mode == "MarkdownV2" and _TELEGRAMIFY_AVAILABLE:
         text = telegramify_markdown.markdownify(text)
-    else:
-        parse_mode = None
+    elif parse_mode == "MarkdownV2" and not _TELEGRAMIFY_AVAILABLE:
+        parse_mode = None  # fall back to plain text
+    # parse_mode="HTML" → send as-is, no conversion needed
     payload = {"chat_id": chat_id, "text": text}
     if parse_mode:
         payload["parse_mode"] = parse_mode

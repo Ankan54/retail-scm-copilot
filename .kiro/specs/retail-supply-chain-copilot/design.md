@@ -8,6 +8,12 @@ The core innovation is **commitment-aware intelligence**: the system extracts de
 
 The architecture follows a multi-agent pattern using **AWS Bedrock Multi-Agent Collaboration** for orchestration, with specialized agents handling different aspects of sales intelligence. The system is designed for accessibility: it works on basic smartphones, handles Hinglish input, and requires minimal data entry from field staff.
 
+**Deployment Status**: ✅ Fully deployed on AWS (February 2026) with PostgreSQL RDS, CloudFront-hosted React dashboard, and Telegram bot integration. Live URLs:
+- Manager Dashboard: https://d2glf02xctjq6v.cloudfront.net
+- API Gateway: https://jn5xaobcs6.execute-api.us-east-1.amazonaws.com/prod
+- Telegram Bot: @CleanMaxSCMBot
+- Model: us.anthropic.claude-sonnet-4-6 (Bedrock inference profile)
+
 ## Architecture
 
 ### High-Level Architecture
@@ -137,27 +143,31 @@ sequenceDiagram
 
 **Backend Services:**
 - **Language**: Python 3.11+
-- **Agent Framework**: AWS Bedrock Multi-Agent Collaboration
+- **Agent Framework**: AWS Bedrock Multi-Agent Collaboration (4 collaborators + 1 supervisor)
 - **Tool Interface**: Lambda Action Groups (OpenAPI schema + Lambda functions)
-- **Database**: SQLite for structured data storage (sufficient for MSME scale)
-- **Bot Framework**: python-telegram-bot with AWS Lambda webhook
+- **Database**: PostgreSQL RDS (scm-postgres.c2na6oc62pb7.us-east-1.rds.amazonaws.com)
+- **Bot Framework**: python-telegram-bot with AWS Lambda Function URL webhook
+- **Markdown Formatting**: telegramify-markdown library for Telegram MarkdownV2
 
 **AI Components:**
-- **LLM Provider**: AWS Bedrock (Claude Sonnet) for all agent intelligence
-- **Agent Orchestration**: AWS Bedrock Supervisor-Collaborator pattern
+- **LLM Provider**: AWS Bedrock (us.anthropic.claude-sonnet-4-6 inference profile)
+- **Agent Orchestration**: AWS Bedrock Supervisor-Collaborator pattern with Code Interpreter
 - **Entity Resolution**: Fuzzy matching using rapidfuzz library (in Lambda)
 - **Intent Classification**: LLM-based classification via Supervisor Agent
+- **Forecast Model**: Python pickle (multiplicative seasonal decomposition + linear trend)
 
 **Frontend:**
-- **Sales Rep Interface**: Telegram Bot with inline keyboards
-- **Manager Dashboard**: React.js with Bootstrap/Tailwind CSS
+- **Sales Rep Interface**: Telegram Bot (@CleanMaxSCMBot) with inline keyboards and MarkdownV2 formatting
+- **Manager Dashboard**: React.js + Vite with Leaflet maps and Chart.js visualizations
 
 **Cloud Infrastructure (AWS):**
 - **AI Services**: Amazon Bedrock for Claude model access and agent orchestration
-- **Compute**: AWS Lambda for action groups and webhook handling
-- **API**: AWS API Gateway for REST endpoints
-- **Storage**: Amazon S3 for static assets and SQLite database file
-- **Frontend Hosting**: AWS Amplify for React dashboard
+- **Compute**: AWS Lambda (7 functions) for action groups and webhook handling
+- **API**: AWS API Gateway (REST) for dashboard endpoints
+- **Storage**: Amazon S3 for Lambda deployment packages and dashboard static files
+- **Database**: Amazon RDS PostgreSQL (supplychain database)
+- **Frontend Hosting**: Amazon CloudFront for React dashboard (d2glf02xctjq6v.cloudfront.net)
+- **Webhook**: Lambda Function URL for Telegram webhook (120s timeout, async pattern)
 - **Monitoring**: Amazon CloudWatch for logs and metrics
 
 ## Components and Interfaces

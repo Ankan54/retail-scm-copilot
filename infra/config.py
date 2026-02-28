@@ -101,7 +101,7 @@ LAMBDA_ENV_VARS = {
     "DB_SSL":      "require",
     # Bedrock Supervisor Agent
     "BEDROCK_AGENT_ID":       "CS4Z87AWWT",
-    "BEDROCK_AGENT_ALIAS_ID": "Z7QHZWIEKT",
+    "BEDROCK_AGENT_ALIAS_ID": "MWVBWEUXUE",
     # Telegram Bot
     "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
     "TELEGRAM_WEBHOOK_SECRET": os.environ.get("TELEGRAM_WEBHOOK_SECRET", ""),
@@ -227,16 +227,27 @@ Workflow:
    - Dealer: [Name]
    - Payment: ₹[amount] (if any)
    - Commitment: [product] [qty] by [date] (if any)
+   - Issue/Complaint: [if any]
    - Next action: [action]
-   
+
    Shall I save this? (Yes/No)"
-5. On confirmation, call create_visit_record and create_commitment
+5. On confirmation, call create_visit_record and create_commitment (if applicable)
+6. AFTER saving the visit record, check if the visit contains any of the following — if YES, immediately call send_manager_alert:
+   - Dealer complaint or frustration (angry, upset, unhappy, frustrated, complaining)
+   - Delivery/quality issues (late delivery, damaged goods, wrong product, quality problem)
+   - Dealer threatening to switch to competitor
+   - Payment refusal or delay ("nahi dunga", "cash flow problem", "payment delay")
+   - Supply/stock issues caused by our side (out of stock due to our non-delivery)
+   - Any situation the manager needs to be aware of immediately
+   When calling send_manager_alert, write the message in English as a clear 2-3 sentence summary of what the dealer said and why it's urgent.
 
 Handle various Hinglish patterns:
 - "2 case 1kg ka order liya" → commitment: CLN-1KG, 24 units
 - "5000 collection kiya" → payment: 5000
 - "next week order dega" → expected_date: 7 days from today
 - "kal delivery chahiye" → delivery request, not a commitment
+- "bahut frustrated hain" → complaint, call send_manager_alert
+- "competitor se le lenge" → serious threat, call send_manager_alert with HIGH priority
 
 Products mapping:
 - "500g", "500 gram", "half kg" → CLN-500G (24 units/case)
@@ -536,6 +547,39 @@ VISIT_ACTION_FUNCTIONS = [
             "limit": {
                 "description": "Number of recent visits to return (default 5)",
                 "type": "integer",
+                "required": False,
+            },
+        },
+    },
+    {
+        "name": "send_manager_alert",
+        "description": (
+            "Create an alert record and send an immediate Telegram notification to the manager. "
+            "Call this whenever a visit reveals: dealer complaints (delivery delay, quality issue, "
+            "frustrated/angry dealer, threat to switch competitor), payment concerns (dealer refusing "
+            "to pay, cash flow problem, delaying payment), or supply issues (dealer out of stock due "
+            "to our delivery failure). Do NOT call for routine visits — only when there is a clear "
+            "problem that the manager needs to know about."
+        ),
+        "parameters": {
+            "dealer_id": {
+                "description": "UUID of the dealer with the issue",
+                "type": "string",
+                "required": True,
+            },
+            "alert_type": {
+                "description": "Type of alert: DEALER_COMPLAINT, PAYMENT_CONCERN, SUPPLY_ISSUE, DEALER_AT_RISK",
+                "type": "string",
+                "required": True,
+            },
+            "message": {
+                "description": "Clear summary of the issue for the manager (2-3 sentences max, in English)",
+                "type": "string",
+                "required": True,
+            },
+            "priority": {
+                "description": "Priority: HIGH, MEDIUM, LOW (default HIGH for complaints)",
+                "type": "string",
                 "required": False,
             },
         },

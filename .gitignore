@@ -74,7 +74,7 @@ scripts/shift_dates.py
 scripts/find_and_shift_dates.py
 scripts/update_sessions_schema.py
 scripts/migrate_sqlite_to_pg.py
-
+DEMO_SCRIPT.md
 # ----------------------------
 # Debug / test scripts with hardcoded credentials
 # ----------------------------

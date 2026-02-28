@@ -23,10 +23,20 @@ Run this after any code changes in `lambdas/` directories.
 
 **What it does**:
 - Creates psycopg2 Lambda Layer (Linux-compatible binaries)
-- Zips each Lambda function with dependencies
+- Zips each Lambda function with dependencies (7 functions total)
 - Uploads zips to S3
 - Updates Lambda function code
 - Attaches psycopg2 layer to all functions
+- Includes forecast model pickle file in scm-forecast deployment
+
+**Lambda Functions Deployed**:
+- scm-telegram-webhook (120s timeout) - Telegram webhook with fast/slow path split
+- scm-dashboard-api (29s) - 11 REST endpoints for dashboard
+- scm-dealer-actions (29s) - 8 tools for Dealer Intelligence Agent
+- scm-visit-actions (29s) - 4 tools for Visit Capture Agent
+- scm-order-actions (29s) - 6 tools for Order Planning Agent
+- scm-analytics-actions (29s) - 5 tools for Manager Analytics Agent
+- scm-forecast (29s) - Demand forecast model (pickle-based)
 
 ### Update Bedrock Agent Action Groups
 ```bash
@@ -40,22 +50,28 @@ Run this after changes to function schemas in `infra/config.py`.
 - Creates/updates agent aliases
 - Configures supervisor with collaborator ARNs
 
-### Deploy API Gateway Routes
+### Deploy Dashboard to CloudFront
 ```bash
-.venv\Scripts\python infra/setup.py --step api
+.venv\Scripts\python infra/setup.py --step deploy_dashboard
 ```
-Run this after adding new endpoints to dashboard API.
+Run this after dashboard code changes or first-time setup.
 
 **What it does**:
-- Deletes existing integrations (handles updates)
-- Creates new Lambda integrations
-- Configures CORS for browser access
-- Creates deployment to `prod` stage
+- Builds React dashboard (`npm run build` in dashboard/)
+- Creates S3 bucket if not exists (supplychain-copilot-667736132441)
+- Creates CloudFront distribution with OAC (Origin Access Control) if not exists
+- Syncs dist/ files to S3 with appropriate cache headers:
+  - index.html: no-store (always fresh)
+  - assets/*: immutable 1yr (content-hashed by Vite)
+  - others: 1 day cache
+- Creates CloudFront invalidation to clear cache
+- Updates state.json with distribution ID
 
-**Note**: If routes appear but return 404, manually create deployment:
-```bash
-aws apigateway create-deployment --rest-api-id jn5xaobcs6 --stage-name prod
-```
+**First run**: Creates OAC + distribution + S3 bucket policy
+**Subsequent runs**: Reuses dist from state.json, syncs files + creates invalidation
+**OriginPath**: /dashboard strips prefix so browser paths match Vite's base: "/" output
+
+**Dashboard URL**: https://d2glf02xctjq6v.cloudfront.net
 
 ### Full Redeploy
 ```bash
@@ -82,7 +98,7 @@ This regenerates `lambdas/forecast/forecast_model.pkl`. Then redeploy lambdas:
 cd dashboard
 npm run dev
 ```
-Hits live API Gateway directly (URL hardcoded in `api.js`).
+Hits live API Gateway directly (URL hardcoded in `api.js`): https://jn5xaobcs6.execute-api.us-east-1.amazonaws.com/prod
 
 ### Production Build
 ```bash
@@ -91,23 +107,23 @@ npm run build
 ```
 Output: `dashboard/dist/` directory.
 
-### Deploy to AWS (TODO - Not Yet Implemented)
-Planned approach:
+### Deploy to CloudFront
 ```bash
-# Build first
-cd dashboard && npm run build
-
-# Sync to S3
-aws s3 sync dist/ s3://supplychain-copilot-667736132441/dashboard/ --delete
-
-# Invalidate CloudFront cache
-aws cloudfront create-invalidation --distribution-id XXX --paths "/*"
+.venv\Scripts\python infra/setup.py --step deploy_dashboard
 ```
 
-CloudFront configuration needed:
-- Origin: S3 bucket
-- Error pages: 403/404 → `/index.html` (for SPA routing)
-- No authentication (hackathon only)
+This command:
+1. Builds dashboard with `npm run build`
+2. Syncs dist/ to S3 bucket (supplychain-copilot-667736132441)
+3. Creates CloudFront invalidation to clear cache
+4. Dashboard available at: https://d2glf02xctjq6v.cloudfront.net
+
+**CloudFront Configuration**:
+- Origin: S3 bucket with OAC (Origin Access Control)
+- OriginPath: /dashboard (strips prefix for Vite routing)
+- Error pages: 403/404 → /index.html (for SPA routing)
+- Cache: index.html = no-store, assets/* = immutable 1yr, others = 1 day
+- No authentication (hackathon/demo only)
 
 ## Testing Deployments
 
