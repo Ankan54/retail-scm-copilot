@@ -1,0 +1,2 @@
+warehouse_id,name,code,address,city,state,pincode,latitude,longitude,is_primary,is_active,created_at
+3c7fb12b-5cc0-412a-84b2-2937e54e6492,CleanMax Godown,WH001,"Plot 45, Industrial Area, Okhla Phase 2",New Delhi,Delhi,110020,28.5355,77.2685,1,1,2020-01-01 00:00:00

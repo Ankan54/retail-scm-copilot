@@ -1,0 +1,9 @@
+setting_key,setting_value,setting_type,description
+DEFAULT_CREDIT_DAYS,15,INTEGER,Default payment terms in days
+DEFAULT_CREDIT_LIMIT,25000,FLOAT,Default credit limit for new dealers
+COMMITMENT_EXPIRY_DAYS,10,INTEGER,Days after expected date to expire commitment
+DROP_SALE_RADIUS_KM,3,FLOAT,Radius in KM to search for drop sale opportunities
+DROP_SALE_MIN_SPARE_CAPACITY,30,FLOAT,Minimum spare capacity to trigger drop sale
+HEALTH_SCORE_REFRESH_HOURS,24,INTEGER,Hours between dealer health score refresh
+FORECAST_CONSUMPTION_BACKWARD_DAYS,7,INTEGER,Default backward consumption days
+FORECAST_CONSUMPTION_FORWARD_DAYS,3,INTEGER,Default forward consumption days

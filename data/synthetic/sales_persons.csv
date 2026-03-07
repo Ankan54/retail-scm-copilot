@@ -1,0 +1,6 @@
+sales_person_id,employee_code,name,email,phone,role,manager_id,telegram_user_id,telegram_chat_id,is_active,date_of_joining,created_at,updated_at
+c361d450-2f4c-46b8-a441-3f819e888d3b,EMP001,Rajesh Kumar,rajesh.kumar@cleanmax.in,9810234567,MANAGER,,TG_100001,CHAT_100001,1,2020-01-15,2020-01-15 00:00:00,2024-06-01 00:00:00
+fe0888ac-3ea5-4fba-846c-2294c69f1659,EMP002,Amit Sharma,amit.sharma@cleanmax.in,9811345678,REP,c361d450-2f4c-46b8-a441-3f819e888d3b,TG_100002,CHAT_100002,1,2021-03-01,2021-03-01 00:00:00,2024-06-01 00:00:00
+92522288-0375-4a48-a9b2-822815269255,EMP003,Sunil Verma,sunil.verma@cleanmax.in,9899456789,REP,c361d450-2f4c-46b8-a441-3f819e888d3b,TG_100003,CHAT_100003,1,2022-01-15,2022-01-15 00:00:00,2024-06-01 00:00:00
+0de98ea1-d767-49c6-97d0-d792e515bae7,EMP004,Deepak Singh,deepak.singh@cleanmax.in,8800567890,REP,c361d450-2f4c-46b8-a441-3f819e888d3b,TG_100004,CHAT_100004,1,2022-08-01,2022-08-01 00:00:00,2024-06-01 00:00:00
+f3a3c673-f426-4fec-b8f9-d1907e18ccd4,EMP005,Vikram Gupta,vikram.gupta@cleanmax.in,7838678901,REP,c361d450-2f4c-46b8-a441-3f819e888d3b,TG_100005,CHAT_100005,1,2023-06-01,2023-06-01 00:00:00,2024-06-01 00:00:00

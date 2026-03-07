@@ -1,0 +1,6 @@
+territory_id,name,region,state,parent_territory_id,is_active,created_at,updated_at
+db7b3194-12f4-4125-a61d-f83ebf2c3b3e,North Delhi,Delhi NCR,Delhi,,1,2024-01-01 00:00:00,2024-01-01 00:00:00
+88e6f822-237d-43ea-bf84-34a97853241e,South Delhi,Delhi NCR,Delhi,,1,2024-01-01 00:00:00,2024-01-01 00:00:00
+71c0dd27-140e-4be2-b07e-038777a9d325,East Delhi,Delhi NCR,Delhi,,1,2024-01-01 00:00:00,2024-01-01 00:00:00
+217f0b72-60d8-4571-afd8-209948224a4d,West Delhi,Delhi NCR,Delhi,,1,2024-01-01 00:00:00,2024-01-01 00:00:00
+9606fd36-9b48-4df1-81b9-8c5bad5ed56f,Central Delhi,Delhi NCR,Delhi,,1,2024-01-01 00:00:00,2024-01-01 00:00:00

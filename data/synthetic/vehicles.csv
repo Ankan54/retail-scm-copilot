@@ -1,0 +1,3 @@
+vehicle_id,vehicle_number,vehicle_type,capacity_units,capacity_weight_kg,capacity_volume_cbm,warehouse_id,driver_name,driver_phone,status,is_active,created_at
+d613750f-7244-4422-a084-da603cde7145,DL-01-AB-1234,MINI_TRUCK,500,1000,6,3c7fb12b-5cc0-412a-84b2-2937e54e6492,Ramu Prasad,9899123456,AVAILABLE,1,2023-01-01 00:00:00
+d6f804d6-de2a-4abc-a548-3b2120173655,DL-01-CD-5678,VAN,250,500,3,3c7fb12b-5cc0-412a-84b2-2937e54e6492,Shyam Lal,9899654321,AVAILABLE,1,2023-06-01 00:00:00
