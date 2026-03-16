@@ -14,7 +14,7 @@ const initConversation = () => ({
     messages: [
         {
             role: "assistant",
-            text: "Namaste! 🙏 I'm your SupplyChain Copilot. I can help you with team performance analytics, dealer network health, at-risk dealer reviews, commitment pipeline tracking, revenue insights, and demand forecasting. How can I help?",
+            text: "Namaste! 🙏 I'm your SupplyChain Copilot — built for **manager analytics queries only**. Ask me about team performance, dealer network health, at-risk dealers, commitment pipeline, revenue insights, and demand forecasting. Note: responses may take up to a minute. How can I help?",
             time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
             agent: "Supervisor",
         },
@@ -301,7 +301,7 @@ export default function ChatTab() {
                         </button>
                     </div>
                     <div style={{ textAlign: "center", marginTop: 7, fontSize: 10, color: T.textLight }}>
-                        Powered by Bedrock Multi-Agent · Supervisor → Dealer Intel · Visit Capture · Order Planning
+                        Manager analytics queries only · Responses may take up to a minute · Powered by AWS Bedrock Multi-Agent
                     </div>
                 </div>
             </div>
